@@ -1,28 +1,23 @@
-// functions
 
-function addNums(a: number, b: number): number {
-    return a+b;
+let age: any = 2;
+
+age = '2';
+age = false;
+
+let title;
+title = 2;
+title = 'Apple';
+
+title = {
+    title: 'Hello World',
 }
 
-const subtract = (a: number, b: number): number => {
 
-    return a-b;
+const getName = (value: any): number => {
+    return value + value
 }
 
-const result = subtract(1, 2)
+const result = getName('1');
+console.log(result);
 
-const addAll = (items: number[]): number => {
-    return items.reduce((a, b) => a+b, 0);
-}
-
-console.log(addAll([1, 2, 3, 4, 5, 6]));
-
-// return type inference
-
-const getName = (name: string) => {
-    return name;
-}
-
-console.log(getName('Katie'));
-
-export {}
+// useful when migrating project from js to ts
