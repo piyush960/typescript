@@ -1,16 +1,12 @@
 "use strict";
-let age = 2;
-age = '2';
-age = false;
-let title;
-title = 2;
-title = 'Apple';
-title = {
-    title: 'Hello World',
-};
-const getName = (value) => {
-    return value + value;
-};
-const result = getName('1');
-console.log(result);
-// useful when migrating project from js to ts
+const person = ['Alex', 21, true];
+const hsla = [20, '100%', '50%', 1];
+function coordinate() {
+    const lat = 100;
+    const long = 50;
+    return [lat, long];
+}
+const coords = coordinate();
+// named tuples
+let user;
+user = ['Sam', 24];

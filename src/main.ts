@@ -1,23 +1,21 @@
 
-let age: any = 2;
+const person: [string, number, boolean] = ['Alex', 21, true];
 
-age = '2';
-age = false;
+const hsla: [number, string, string, number] = [20, '100%', '50%', 1];
 
-let title;
-title = 2;
-title = 'Apple';
+function coordinate(): [number, number]{
 
-title = {
-    title: 'Hello World',
+    const lat = 100
+    const long = 50
+
+    return [lat, long]
 }
 
+const coords = coordinate();
 
-const getName = (value: any): number => {
-    return value + value
-}
+// named tuples
 
-const result = getName('1');
-console.log(result);
+let user: [name: string, age: number] 
 
-// useful when migrating project from js to ts
+user = ['Sam', 24];
+
