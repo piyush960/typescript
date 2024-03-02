@@ -1,46 +1,37 @@
 
+// arrays
 
-let myname = 'Piyush';
+const fruits: string[] = ['Mango', 'Banana', 'Apple'];
 
-// myname = 6;
+fruits.push('Pineapple');
+
+// type inference in arrays
+
+const games = ['Tomb Raider', 'GTA 5', 'Cyberpunk', 'Vice City', 4, true];
+
+games.push(false);
+games.push('Assassin Creed');
 
 
-// Benifits
 
-// 1.) better error feedback
+// objects
 
-function reverse(str: string){
-    return str.split('').reverse().join('');
+const user: {name: string, age: number, gender: string} = {
+    name: 'Alex',
+    age: 21,
+    gender: 'Male'
 }
 
-const result = reverse('hello');
+// user.age = 'Banana';
 
-// 2.) better autocompletion & code hints
 
-const reversed = reverse('Alex');
+// type inference in objects
 
-console.log(reversed);
-
-// 3.) custom types
-
-interface MenuItem{
-    title: string,
-    cost: number
+const game = {
+    name: 'Cyberpunk',
+    isOnline: true
 }
 
-function printMenuItem(item: MenuItem){
-    console.log(item.title, ':', item.cost);
-}
-
-// error example
-// printMenuItem()
-
-// printMenuItem({ title: 'A Title' , cost : '15'});
-
-
-printMenuItem({ title: 'A Title', cost: 15 });
-
-// 4.) self documenting
-console.log('watching...')
+// game.name = 1;
 
 export {}

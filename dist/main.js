@@ -1,22 +1,21 @@
 "use strict";
+// arrays
 Object.defineProperty(exports, "__esModule", { value: true });
-let myname = 'Piyush';
-// myname = 6;
-// Benifits
-// 1.) better error feedback
-function reverse(str) {
-    return str.split('').reverse().join('');
-}
-const result = reverse('hello');
-// 2.) better autocompletion & code hints
-const reversed = reverse('Alex');
-console.log(reversed);
-function printMenuItem(item) {
-    console.log(item.title, ':', item.cost);
-}
-// error example
-// printMenuItem()
-// printMenuItem({ title: 'A Title' , cost : '15'});
-printMenuItem({ title: 'A Title', cost: 15 });
-// 4.) self documenting
-console.log('watching...');
+const fruits = ['Mango', 'Banana', 'Apple'];
+fruits.push('Pineapple');
+// type inference in arrays
+const games = ['Tomb Raider', 'GTA 5', 'Cyberpunk', 'Vice City', 4, true];
+games.push(false);
+games.push('Assassin Creed');
+// objects
+const user = {
+    name: 'Alex',
+    age: 21,
+    gender: 'Male'
+};
+// user.age = 'Banana';
+// type inference in objects
+const game = {
+    name: 'Cyberpunk',
+    isOnline: true
+};
