@@ -41,5 +41,6 @@ function printMenuItem(item: MenuItem){
 printMenuItem({ title: 'A Title', cost: 15 });
 
 // 4.) self documenting
+console.log('watching...')
 
 export {}
