@@ -1,37 +1,28 @@
+// functions
 
-// arrays
-
-const fruits: string[] = ['Mango', 'Banana', 'Apple'];
-
-fruits.push('Pineapple');
-
-// type inference in arrays
-
-const games = ['Tomb Raider', 'GTA 5', 'Cyberpunk', 'Vice City', 4, true];
-
-games.push(false);
-games.push('Assassin Creed');
-
-
-
-// objects
-
-const user: {name: string, age: number, gender: string} = {
-    name: 'Alex',
-    age: 21,
-    gender: 'Male'
+function addNums(a: number, b: number): number {
+    return a+b;
 }
 
-// user.age = 'Banana';
+const subtract = (a: number, b: number): number => {
 
-
-// type inference in objects
-
-const game = {
-    name: 'Cyberpunk',
-    isOnline: true
+    return a-b;
 }
 
-// game.name = 1;
+const result = subtract(1, 2)
+
+const addAll = (items: number[]): number => {
+    return items.reduce((a, b) => a+b, 0);
+}
+
+console.log(addAll([1, 2, 3, 4, 5, 6]));
+
+// return type inference
+
+const getName = (name: string) => {
+    return name;
+}
+
+console.log(getName('Katie'));
 
 export {}
