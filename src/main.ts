@@ -1,41 +1,32 @@
-//  interfaces - user defined data types (like structs in C++)
+// type aliases
 
-interface Author {
+// with tuples
+type RGB = [number, number, number];
+
+function getColor(): RGB {
+    const r = Math.floor(Math.random()*255);
+    const g = Math.floor(Math.random()*255);
+    const b = Math.floor(Math.random()*255);
+
+    return [r, g, b];
+}
+
+console.log(getColor());
+
+// with objects
+
+type User = {
     name: string,
-    avatar: string;
+    score: number
 }
 
-interface Post {
-    title: string,
-    author: Author, 
-    date: Date,
-    body: string
-}
-
-const authorOne: Author = {
+const userOne: User = {
     name: 'Alex',
-    avatar: 'img/avatar.jpg'
+    score: 86
 }
 
-const newPost: Post = {
-    title: 'My first Post',
-    body: 'Body of my Post',
-    date: new Date(),
-    author: authorOne
+const printUser = (user: User): void => {
+    console.log(`User is ${user.name} with score ${user.score}`);
 }
 
-
-// with functions
-
-const getPost = (post: Post): void => {
-    console.log(`This is ${post.title} by ${post.author.name}`);
-}
-
-// with arrays
-
-const posts: Post[] = []
-
-posts.push(newPost);
-
-getPost(newPost);
-
+printUser(userOne);
