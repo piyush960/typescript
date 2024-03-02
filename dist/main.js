@@ -1,12 +1,20 @@
 "use strict";
-const person = ['Alex', 21, true];
-const hsla = [20, '100%', '50%', 1];
-function coordinate() {
-    const lat = 100;
-    const long = 50;
-    return [lat, long];
-}
-const coords = coordinate();
-// named tuples
-let user;
-user = ['Sam', 24];
+//  interfaces - user defined data types (like structs in C++)
+const authorOne = {
+    name: 'Alex',
+    avatar: 'img/avatar.jpg'
+};
+const newPost = {
+    title: 'My first Post',
+    body: 'Body of my Post',
+    date: new Date(),
+    author: authorOne
+};
+// with functions
+const getPost = (post) => {
+    console.log(`This is ${post.title} by ${post.author.name}`);
+};
+// with arrays
+const posts = [];
+posts.push(newPost);
+getPost(newPost);

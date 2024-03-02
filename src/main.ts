@@ -1,21 +1,41 @@
+//  interfaces - user defined data types (like structs in C++)
 
-const person: [string, number, boolean] = ['Alex', 21, true];
-
-const hsla: [number, string, string, number] = [20, '100%', '50%', 1];
-
-function coordinate(): [number, number]{
-
-    const lat = 100
-    const long = 50
-
-    return [lat, long]
+interface Author {
+    name: string,
+    avatar: string;
 }
 
-const coords = coordinate();
+interface Post {
+    title: string,
+    author: Author, 
+    date: Date,
+    body: string
+}
 
-// named tuples
+const authorOne: Author = {
+    name: 'Alex',
+    avatar: 'img/avatar.jpg'
+}
 
-let user: [name: string, age: number] 
+const newPost: Post = {
+    title: 'My first Post',
+    body: 'Body of my Post',
+    date: new Date(),
+    author: authorOne
+}
 
-user = ['Sam', 24];
+
+// with functions
+
+const getPost = (post: Post): void => {
+    console.log(`This is ${post.title} by ${post.author.name}`);
+}
+
+// with arrays
+
+const posts: Post[] = []
+
+posts.push(newPost);
+
+getPost(newPost);
 
