@@ -1,17 +1,13 @@
 "use strict";
-// type aliases
-function getColor() {
-    const r = Math.floor(Math.random() * 255);
-    const g = Math.floor(Math.random() * 255);
-    const b = Math.floor(Math.random() * 255);
-    return [r, g, b];
-}
-console.log(getColor());
-const userOne = {
-    name: 'Alex',
-    score: 86
+// union types
+let userId;
+userId = 1;
+userId = '67332';
+const userIdOne = 1;
+const userIdTwo = '1';
+// pitfall
+const convert = (numId) => {
+    // can use only properties and method common to both the types (i.e. number | string)
+    // parseInt(numId);
+    return 1;
 };
-const printUser = (user) => {
-    console.log(`User is ${user.name} with score ${user.score}`);
-};
-printUser(userOne);
