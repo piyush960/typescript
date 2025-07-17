@@ -1,169 +1,235 @@
 import { Component } from '@angular/core';
-
-@Component({
-  selector: 'my-app',
-  template: `
-    <ag-grid-angular
-      style="width: 100%; height: 600px;"
-      class="ag-theme-alpine"
-      [rowData]="rowData"
-      [columnDefs]="columnDefs"
-      [frameworkComponents]="{ 
-        resourceSpark: ResourceSparklineRenderer 
-      }"
-      [defaultColDef]="{ resizable: true, flex: 1 }">
-    </ag-grid-angular>
-  `
-})
-export class AppComponent {
-  columnDefs = [
-    {
-      headerName: 'Quota',
-      field: 'quota-name',
-      tooltipField: 'quota-name'
-    },
-    {
-      headerName: 'Gloucester',
-      field: 'gl',
-      cellRenderer: 'resourceSpark',
-      headerTooltip: 'Gloucester quota usage'
-    },
-    {
-      headerName: 'Slough',
-      field: 'sl',
-      cellRenderer: 'resourceSpark',
-      headerTooltip: 'Slough quota usage'
-    }
-  ];
-
-  rowData = [
-    {
-      'quota-name': 'b-compute-quota',
-      gl: {
-        used: {
-          'limits.cpu': '51500m',
-          'limits.memory': '117534Mi',
-          pods: '74',
-          'requests.cpu': '27950m',
-          'requests.memory': '80532Mi',
-        },
-        hard: {
-          'limits.cpu': '120',
-          'limits.memory': '250Gi',
-          pods: '150',
-          'requests.cpu': '80',
-          'requests.memory': '250Gi',
-        }
-      },
-      sl: {
-        used: {
-          'limits.cpu': '51500m',
-          'limits.memory': '117534Mi',
-          pods: '74',
-          'requests.cpu': '27950m',
-          'requests.memory': '80532Mi',
-        },
-        hard: {
-          'limits.cpu': '120',
-          'limits.memory': '250Gi',
-          pods: '150',
-          'requests.cpu': '80',
-          'requests.memory': '250Gi',
-        }
-      }
-    },
-    // ... more rows
-  ];
-}
-
-
-import { Component } from '@angular/core';
 import { ICellRendererAngularComp } from 'ag-grid-angular';
+import { ICellRendererParams } from 'ag-grid-community';
 import { AgChartOptions } from 'ag-charts-community';
 
 @Component({
-  selector: 'resource-chart-renderer',
-  template: `
-    <ag-charts-angular
-      class="mini-chart"
-      [options]="chartOptions">
-    </ag-charts-angular>
-  `,
-  styles: [`
-    .mini-chart {
-      width: 100%;
-      height: 100px;
-    }
-  `]
+  selector: 'app-chart-cell-renderer',
+  templateUrl: './chart-cell-renderer.component.html',
+  styleUrls: ['./chart-cell-renderer.component.css'],
 })
-export class ResourceChartRenderer implements ICellRendererAngularComp {
-  chartOptions!: AgChartOptions;
+export class ChartCellRendererComponent implements ICellRendererAngularComp {
+  public chartOptionsList: AgChartOptions[] = [];
 
-  private readonly metrics = [
-    { key: 'limits.cpu',    label: 'CPU (m)'     },
-    { key: 'limits.memory', label: 'Memory (Mi)' },
-    { key: 'pods',          label: 'Pods'        },
-    { key: 'requests.cpu',  label: 'Req CPU'     },
-    { key: 'requests.memory', label: 'Req Mem'   },
-  ];
+  agInit(params: ICellRendererParams): void {
+    const locationData = params.value;
+    if (!locationData || !locationData.used || !locationData.hard) {
+      return;
+    }
 
-  agInit(params: any): void {
-    const used   = this.metrics.map(m => parseFloat(params.value.used[m.key].replace(/[a-zA-Z]+/, '')));
-    const hard   = this.metrics.map(m => parseFloat(params.value.hard[m.key].replace(/[a-zA-Z]+/, '')));
-    const percent = used.map((u, i) => hard[i] > 0 ? Math.round(u / hard[i] * 100) : 0);
+    const used = locationData.used;
+    const hard = locationData.hard;
+    const resources = Object.keys(used); // e.g., ['limits.cpu', 'limits.memory', ...]
 
-    this.chartOptions = {
-      autoSize: true,
-      data: this.metrics.map((m, i) => ({
-        metric: m.label,
-        used: percent[i],
-        remaining: 100 - percent[i]
-      })),
+    // Create a chart for each resource
+    this.chartOptionsList = resources.map((resourceKey) => {
+      const usedValue = this.parseResourceValue(used[resourceKey]);
+      const hardValue = this.parseResourceValue(hard[resourceKey]);
+      
+      // Define a display-friendly title and unit
+      const { title, unit } = this.getResourceMetadata(resourceKey);
+
+      return this.createBulletChartOptions(title, unit, usedValue, hardValue);
+    });
+  }
+
+  // Utility to create chart options for a bullet chart
+  createBulletChartOptions(title: string, unit: string, used: number, hard: number): AgChartOptions {
+    return {
+      type: 'bullet',
+      data: [{
+        title: title,
+        value: used,
+        target: hard,
+      }],
+      // Make the chart compact
+      height: 60,
+      width: 250,
       series: [
         {
-          type: 'column',
-          xKey: 'metric',
-          yKey: 'used',
-          yName: 'Used %',
-          tooltip: {
-            renderer: ({datum}: any) => ({
-              content: `${datum.metric}: ${datum.used}%`
-            })
-          }
-        }
+          valueKey: 'value',
+          targetKey: 'target',
+          titleKey: 'title',
+        },
       ],
       axes: [
-        { type: 'category', position: 'bottom', label: { rotation: 0 } },
-        { type: 'number', position: 'left', visible: false, nice: false, domain: [0, 100] }
+        {
+          type: 'number',
+          position: 'bottom',
+          label: {
+            formatter: (params) => `${params.value}${unit}`,
+          },
+        },
+        {
+          type: 'category',
+          position: 'left',
+        },
       ],
-      padding: { top: 10, right: 10, bottom: 20, left: 10 },
       legend: { enabled: false },
-      title: { text: '' }
     };
   }
 
-  refresh(): boolean { return false; }
+  // Utility to parse string values like "51500m", "250Gi", "74" into numbers
+  parseResourceValue(value: string): number {
+    if (value.endsWith('m')) { // Milli-cores to cores
+      return parseFloat(value) / 1000;
+    }
+    if (value.endsWith('Mi')) { // Mebibytes to Gibibytes
+      return parseFloat(value) / 1024;
+    }
+    if (value.endsWith('Gi')) { // Gibibytes
+      return parseFloat(value);
+    }
+    if (value.endsWith('Ti')) { // Tebibytes to Gibibytes
+        return parseFloat(value) * 1024;
+    }
+    // For plain numbers like pods or CPU cores
+    return parseFloat(value);
+  }
+  
+  // Helper to get a clean title and unit for the chart
+  getResourceMetadata(resourceKey: string): { title: string, unit: string } {
+    if (resourceKey.includes('cpu')) return { title: 'CPU', unit: ' cores' };
+    if (resourceKey.includes('memory')) return { title: 'Memory', unit: ' Gi' };
+    if (resourceKey.includes('pods')) return { title: 'Pods', unit: '' };
+    return { title: resourceKey, unit: '' };
+  }
+
+  refresh(params: ICellRendererParams): boolean {
+    return false;
+  }
 }
 
 
 
-// in your AppComponent
-columnDefs = [
-  { headerName: 'Quota', field: 'quota-name', tooltipField: 'quota-name' },
-  {
-    headerName: 'Gloucester',
-    field: 'gl',
-    cellRenderer: 'resourceChart',
-    headerTooltip: 'Gloucester quota usage'
-  },
-  {
-    headerName: 'Slough',
-    field: 'sl',
-    cellRenderer: 'resourceChart',
-    headerTooltip: 'Slough quota usage'
-  }
-];
+<div class="charts-container">
+  <div *ngFor="let options of chartOptionsList" class="chart-wrapper">
+    <ag-charts-angular [options]="options"></ag-charts-angular>
+  </div>
+</div>
 
-frameworkComponents = {
-  resourceChart: ResourceChartRenderer
-};
+
+.charts-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  padding-top: 5px;
+}
+
+.chart-wrapper {
+  margin-bottom: 5px;
+}
+
+
+
+import { Component } from '@angular/core';
+import { ColDef } from 'ag-grid-community';
+import { ChartCellRendererComponent } from './chart-cell-renderer/chart-cell-renderer.component';
+
+@Component({
+  selector: 'app-root',
+  templateUrl: './app.component.html',
+})
+export class AppComponent {
+  public columnDefs: ColDef[] = [
+    {
+      headerName: 'Quota Name',
+      field: 'quota-name',
+      width: 150,
+    },
+    {
+      headerName: 'Gloucester',
+      // Use dot notation to access nested data
+      field: 'b-compute-quota.gl',
+      cellRenderer: ChartCellRendererComponent,
+      width: 300,
+    },
+    {
+      headerName: 'Slough',
+      field: 'b-compute-quota.sl',
+      cellRenderer: ChartCellRendererComponent,
+      width: 300,
+    },
+  ];
+
+  // Adding 'quota-name' to your sample data
+  public rowData: any[] = [
+    {
+      'quota-name': 'Project Alpha',
+      'b-compute-quota': {
+        gl: {
+          used: {
+            'limits.cpu': '51500m', // -> 51.5 cores
+            'limits.memory': '117534Mi', // -> 114.7 Gi
+            'pods': '74',
+          },
+          hard: {
+            'limits.cpu': '120', // -> 120 cores
+            'limits.memory': '250Gi', // -> 250 Gi
+            'pods': '150',
+          },
+        },
+        sl: {
+          used: {
+            'requests.cpu': '27950m', // -> 27.95 cores
+            'requests.memory': '80532Mi', // -> 78.6 Gi
+            'pods': '74',
+          },
+          hard: {
+            'requests.cpu': '80', // -> 80 cores
+            'requests.memory': '250Gi', // -> 250 Gi
+            'pods': '150',
+          },
+        },
+      },
+    },
+     // Add more rows as needed
+  ];
+
+  public defaultColDef: ColDef = {
+    flex: 1,
+    resizable: true,
+  };
+}
+
+
+
+
+<ag-grid-angular
+  style="width: 100%; height: 500px;"
+  class="ag-theme-quartz"
+  [rowData]="rowData"
+  [columnDefs]="columnDefs"
+  [defaultColDef]="defaultColDef"
+  [autoHeight]="true"
+></ag-grid-angular>
+
+
+
+import { NgModule } from '@angular/core';
+import { BrowserModule } from '@angular/platform-browser';
+import { AppComponent } from './app.component';
+
+// AG Grid & AG Charts Imports
+import { AgGridAngular } from 'ag-grid-angular';
+import { AgChartsAngular } from 'ag-charts-angular';
+import { ChartCellRendererComponent } from './chart-cell-renderer/chart-cell-renderer.component';
+import { HttpClientModule } from '@angular/common/http';
+
+
+@NgModule({
+  declarations: [
+    AppComponent,
+    ChartCellRendererComponent // <-- Declare the renderer
+  ],
+  imports: [
+    BrowserModule,
+    AgGridAngular,         // <-- Import AG Grid
+    AgChartsAngular,       // <-- Import AG Charts
+    HttpClientModule,
+  ],
+  providers: [],
+  bootstrap: [AppComponent]
+})
+export class AppModule { }
