@@ -1,96 +1,130 @@
-To recreate the **circular usage chart** like the one shown in the image using **Angular with AG Charts**, we can use **AG Donut Chart** (part of AG Charts) and customize the labels and colors.
+import { Component } from '@angular/core';
+import { ColDef, GridApi, GridReadyEvent } from 'ag-grid-community';
+import { Workbook } from 'exceljs';
+import { saveAs } from 'file-saver';
 
-Here’s how to build a reusable **Resource Quota Donut Chart Component** in Angular using **AG Charts**:
-
----
-
-### 🔧 1. **Install AG Charts**
-
-```bash
-npm install ag-charts-community ag-charts-angular
-```
-
----
-
-### 🧩 2. **Angular Component Setup**
-
-#### `resource-quota-chart.component.ts`
-
-```ts
-import { Component, Input } from '@angular/core';
-import { AgChartOptions } from 'ag-charts-community';
+// Helper function to convert hex to ARGB for exceljs
+const getARGBFromHex = (hex) => {
+  if (!hex) return 'FFFFFFFF'; // Default to white if no color
+  const hexValue = hex.replace('#', '');
+  return 'FF' + hexValue.toUpperCase();
+};
 
 @Component({
-  selector: 'app-resource-quota-chart',
-  templateUrl: './resource-quota-chart.component.html',
+  selector: 'app-root',
+  templateUrl: './app.component.html',
+  styleUrls: ['./app.component.css']
 })
-export class ResourceQuotaChartComponent {
-  @Input() label = 'limits.cpu';
-  @Input() percentUsed = 42.9;
+export class AppComponent {
+  private gridApi!: GridApi;
 
-  get chartOptions(): AgChartOptions {
-    const remaining = 100 - this.percentUsed;
-    return {
-      data: [
-        { category: 'Used', value: this.percentUsed },
-        { category: 'Free', value: remaining },
-      ],
-      series: [
-        {
-          type: 'donut',
-          angleKey: 'value',
-          colorKey: 'category',
-          colors: ['#4caf50', '#e0e0e0'],
-          innerRadiusRatio: 0.75,
-          strokeWidth: 0,
-        },
-      ],
-      title: {
-        text: `${this.percentUsed}% used`,
-        fontSize: 16,
-        color: '#333',
-      },
-      subtitle: {
-        text: this.label,
-        fontSize: 14,
-        color: '#777',
-      },
-      legend: { enabled: false },
-    };
+  public columnDefs: ColDef[] = [
+    { field: 'make' },
+    { field: 'model' },
+    { 
+      field: 'price',
+      // The SAME logic here will be used for the export
+      cellStyle: params => {
+        if (params.value > 70000) {
+          // A rich green for expensive cars
+          return { backgroundColor: '#d5f5e3' }; 
+        }
+        if (params.value < 30000) {
+          // A light red for cheaper cars
+          return { backgroundColor: '#f5dddd' };
+        }
+        return null; // No specific style
+      }
+    }
+  ];
+
+  public rowData = [
+    { make: 'Toyota', model: 'Celica', price: 35000 },
+    { make: 'Ford', model: 'Mondeo', price: 32000 },
+    { make: 'Porsche', model: 'Boxster', price: 72000 },
+    { make: 'Mercedes', model: 'C-Class', price: 95000 },
+    { make: 'BMW', model: 'M3', price: 68000 },
+    { make: 'Honda', model: 'Civic', price: 28000 },
+  ];
+
+  onGridReady(params: GridReadyEvent) {
+    this.gridApi = params.api;
+  }
+
+  async exportToExcel() {
+    const workbook = new Workbook();
+    const worksheet = workbook.addWorksheet('Styled Export');
+
+    // 1. Add Headers
+    const headerRow = worksheet.addRow(
+      this.columnDefs.map(colDef => colDef.field)
+    );
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFD3D3D3' }, // A light grey background
+      };
+      cell.border = {
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' },
+      };
+    });
+
+    // 2. Add Data Rows and Apply Styles
+    this.gridApi.forEachNode(node => {
+      const rowData = this.columnDefs.map(colDef => node.data[colDef.field!]);
+      const row = worksheet.addRow(rowData);
+
+      // 3. Iterate over the cells in the new row
+      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        const colDef = this.columnDefs[colNumber - 1];
+
+        // Apply cell styles from colDef
+        if (colDef.cellStyle && typeof colDef.cellStyle === 'function') {
+          const styleParams = {
+            value: cell.value,
+            data: node.data,
+            node: node,
+            colDef: colDef,
+            column: this.gridApi.getColumn(colDef.field!)!,
+            api: this.gridApi,
+            context: this.gridApi.getContext()
+          };
+          
+          const cellStyle = colDef.cellStyle(styleParams);
+
+          if (cellStyle && cellStyle.backgroundColor) {
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: getARGBFromHex(cellStyle.backgroundColor) }
+            };
+          }
+        }
+      });
+    });
+
+    // Adjust column widths for better readability
+    worksheet.columns.forEach(column => {
+        let maxColumnLength = 0;
+        if (column && column.values) {
+            column.values.forEach(value => {
+                const cellValue = value ? String(value) : '';
+                maxColumnLength = Math.max(maxColumnLength, cellValue.length);
+            });
+            column.width = maxColumnLength < 10 ? 10 : maxColumnLength + 2;
+        }
+    });
+
+
+    // 4. Generate and Download the Excel file
+    workbook.xlsx.writeBuffer().then((buffer) => {
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      saveAs(blob, 'ag-grid-styled-export.xlsx');
+    });
   }
 }
-```
-
-#### `resource-quota-chart.component.html`
-
-```html
-<ag-charts-angular [options]="chartOptions" style="width: 180px; height: 180px;"></ag-charts-angular>
-```
-
----
-
-### 🧪 3. **Use the Component**
-
-#### `app.component.html`
-
-```html
-<div style="display: flex; gap: 40px; align-items: center;">
-  <app-resource-quota-chart label="limits.cpu" [percentUsed]="42.9"></app-resource-quota-chart>
-  <app-resource-quota-chart label="limits.memory" [percentUsed]="45.0"></app-resource-quota-chart>
-</div>
-```
-
----
-
-### 🖼️ Output Preview
-
-This setup will give you a donut chart similar to the one in the image:
-
-* A thick circular progress ring
-* Green used % and grey remaining
-* Label (e.g., `limits.cpu`)
-* Centered text showing usage %
-
----
-
-Would you like to include additional data like **name** or **namespace** below the chart? I can help you include that too.
