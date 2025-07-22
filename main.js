@@ -1,130 +1,127 @@
 import { Component } from '@angular/core';
-import { ColDef, GridApi, GridReadyEvent } from 'ag-grid-community';
+// Make sure to import Column from ag-grid-community
+import { ColDef, ColGroupDef, GridApi, GridReadyEvent, Column } from 'ag-grid-community';
 import { Workbook } from 'exceljs';
 import { saveAs } from 'file-saver';
 
-// Helper function to convert hex to ARGB for exceljs
-const getARGBFromHex = (hex) => {
+// Helper function to convert hex color to the ARGB format exceljs needs
+const getARGBFromHex = (hex: string | null | undefined): string => {
   if (!hex) return 'FFFFFFFF'; // Default to white if no color
   const hexValue = hex.replace('#', '');
   return 'FF' + hexValue.toUpperCase();
 };
 
 @Component({
-  selector: 'app-root',
-  templateUrl: './app.component.html',
-  styleUrls: ['./app.component.css']
+  // ... your component decorator
 })
-export class AppComponent {
+export class YourComponent {
   private gridApi!: GridApi;
 
-  public columnDefs: ColDef[] = [
-    { field: 'make' },
-    { field: 'model' },
-    { 
-      field: 'price',
-      // The SAME logic here will be used for the export
-      cellStyle: params => {
-        if (params.value > 70000) {
-          // A rich green for expensive cars
-          return { backgroundColor: '#d5f5e3' }; 
-        }
-        if (params.value < 30000) {
-          // A light red for cheaper cars
-          return { backgroundColor: '#f5dddd' };
-        }
-        return null; // No specific style
-      }
-    }
-  ];
-
-  public rowData = [
-    { make: 'Toyota', model: 'Celica', price: 35000 },
-    { make: 'Ford', model: 'Mondeo', price: 32000 },
-    { make: 'Porsche', model: 'Boxster', price: 72000 },
-    { make: 'Mercedes', model: 'C-Class', price: 95000 },
-    { make: 'BMW', model: 'M3', price: 68000 },
-    { make: 'Honda', model: 'Civic', price: 28000 },
-  ];
+  // ... your existing properties: columnDefs, rowData, clusters, etc.
 
   onGridReady(params: GridReadyEvent) {
     this.gridApi = params.api;
   }
+  
+  /**
+   * Helper function to get the full header name for a column, including its parent group.
+   * This creates flattened headers like "Gloucester - CPU Request".
+   */
+  private getFullHeaderName(column: Column): string {
+    const colDef = column.getColDef();
+    const parent = column.getParent();
+
+    // Check if the column is in a group and the group has a header name
+    if (parent && parent.getColDef().headerName) {
+      return `${parent.getColDef().headerName} - ${colDef.headerName}`;
+    }
+    
+    // Otherwise, just return the column's own header name
+    return colDef.headerName || '';
+  }
 
   async exportToExcel() {
-    const workbook = new Workbook();
-    const worksheet = workbook.addWorksheet('Styled Export');
+    if (!this.gridApi) {
+      console.error('Grid API not available.');
+      return;
+    }
 
-    // 1. Add Headers
-    const headerRow = worksheet.addRow(
-      this.columnDefs.map(colDef => colDef.field)
-    );
+    const workbook = new Workbook();
+    const worksheet = workbook.addWorksheet('Application Data');
+
+    // 1. Get all displayed columns from the Grid API.
+    // This is the key change to handle your complex/grouped structure.
+    const allColumns = this.gridApi.getAllDisplayedColumns();
+
+    // 2. Add Header Row
+    // We use the helper function to create flattened header names.
+    const headerNames = allColumns.map(col => this.getFullHeaderName(col));
+    const headerRow = worksheet.addRow(headerNames);
+    
+    // Style the header row
     headerRow.eachCell((cell) => {
       cell.font = { bold: true };
-      cell.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FFD3D3D3' }, // A light grey background
-      };
-      cell.border = {
-        top: { style: 'thin' },
-        left: { style: 'thin' },
-        bottom: { style: 'thin' },
-        right: { style: 'thin' },
-      };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD3D3D3' } }; // Light Grey
+      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
     });
 
-    // 2. Add Data Rows and Apply Styles
+    // 3. Add Data Rows and Apply Styles
     this.gridApi.forEachNode(node => {
-      const rowData = this.columnDefs.map(colDef => node.data[colDef.field!]);
+      // Create an array of data for the current row based on the displayed columns
+      const rowData = allColumns.map(column => this.gridApi.getValue(column, node));
       const row = worksheet.addRow(rowData);
 
-      // 3. Iterate over the cells in the new row
+      // 4. Iterate over the cells of the new row to apply styles
       row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-        const colDef = this.columnDefs[colNumber - 1];
+        const column = allColumns[colNumber - 1];
+        if (!column) return;
 
-        // Apply cell styles from colDef
+        const colDef = column.getColDef();
+        
+        // Check if the column has a cellStyle function
         if (colDef.cellStyle && typeof colDef.cellStyle === 'function') {
+          // Build the exact same params object that AG Grid uses
           const styleParams = {
             value: cell.value,
             data: node.data,
             node: node,
             colDef: colDef,
-            column: this.gridApi.getColumn(colDef.field!)!,
+            column: column,
             api: this.gridApi,
             context: this.gridApi.getContext()
           };
-          
-          const cellStyle = colDef.cellStyle(styleParams);
 
-          if (cellStyle && cellStyle.backgroundColor) {
+          // Run your original cellStyle function to get the result
+          const cellStyleResult = colDef.cellStyle(styleParams);
+
+          // Apply the background color if the function returned one
+          if (cellStyleResult && cellStyleResult.backgroundColor) {
             cell.fill = {
               type: 'pattern',
               pattern: 'solid',
-              fgColor: { argb: getARGBFromHex(cellStyle.backgroundColor) }
+              fgColor: { argb: getARGBFromHex(cellStyleResult.backgroundColor) }
             };
           }
         }
       });
     });
 
-    // Adjust column widths for better readability
+    // 5. Adjust column widths for better readability
     worksheet.columns.forEach(column => {
-        let maxColumnLength = 0;
-        if (column && column.values) {
-            column.values.forEach(value => {
-                const cellValue = value ? String(value) : '';
-                maxColumnLength = Math.max(maxColumnLength, cellValue.length);
-            });
-            column.width = maxColumnLength < 10 ? 10 : maxColumnLength + 2;
-        }
+      let maxColumnLength = 0;
+      if (column && column.values) {
+        column.values.forEach(value => {
+          // Header is value[1], data starts from value[2]
+          const cellValue = value ? String(value) : '';
+          maxColumnLength = Math.max(maxColumnLength, cellValue.length);
+        });
+        column.width = maxColumnLength < 12 ? 12 : maxColumnLength + 2;
+      }
     });
 
-
-    // 4. Generate and Download the Excel file
-    workbook.xlsx.writeBuffer().then((buffer) => {
-      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      saveAs(blob, 'ag-grid-styled-export.xlsx');
-    });
+    // 6. Generate and Download the Excel file
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    saveAs(blob, 'application-data-export.xlsx');
   }
 }
