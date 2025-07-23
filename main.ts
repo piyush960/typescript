@@ -297,3 +297,172 @@ public class SecurityConfig {
 ```
 
 This configuration secures your application while allowing the dual-mode functionality you requested.
+
+
+    Of course. Here is the updated code that re-integrates your token refresh and retry logic into the new dual-mode system.
+
+This implementation correctly distinguishes between an expired **user session token** (which requires re-login) and an expired **static client token** (which can be refreshed automatically).
+
+-----
+
+### \#\# 1. Update the OpenShift Service
+
+First, we'll modify the `OpenShiftServiceImpl` to make the static client initialization method `synchronized` and reusable. This ensures that if multiple requests detect the expired static token simultaneously, they won't all try to re-initialize it at once.
+
+**`com/barclays/iportalmonitoring/service/impl/OpenShiftServiceImpl.java`**
+
+```java
+// ... other imports
+import jakarta.annotation.PostConstruct;
+
+@Service
+public class OpenShiftServiceImpl implements OpenShiftService {
+
+    // ... all existing fields (log, applicationContext, tokenProvider, etc.) remain the same
+
+    // The constructor remains the same
+    @Autowired
+    public OpenShiftServiceImpl(...) { ... }
+
+    /**
+     * This method runs once at startup to perform the initial client setup.
+     */
+    @PostConstruct
+    public void initialSetup() {
+        reinitializeStaticClients();
+    }
+
+    /**
+     * Re-initializes the static, read-only clients. This method is synchronized
+     * to prevent race conditions if multiple threads detect an expired token.
+     * It's now the single source for creating/refreshing static clients.
+     */
+    public synchronized void reinitializeStaticClients() {
+        log.info("Initializing/Refreshing static OpenShift clients...");
+        try {
+            String tokenGL = tokenProvider.fetchTokenForUser("gl", staticUsername, staticPassword);
+            this.staticClientGL = applicationContext.getBean(OpenShiftClient.class, "gl", tokenGL);
+
+            String tokenSL = tokenProvider.fetchTokenForUser("sl", staticUsername, staticPassword);
+            this.staticClientSL = applicationContext.getBean(OpenShiftClient.class, "sl", tokenSL);
+
+            log.info("Static OpenShift clients initialized/refreshed successfully.");
+        } catch (Exception e) {
+            log.error("FATAL: Could not initialize static OpenShift clients!", e);
+        }
+    }
+
+    // ... all other methods (getActiveClient, setActiveClient, etc.) remain the same
+}
+```
+
+-----
+
+### \#\# 2. Update the AOP Aspect with Refresh Logic
+
+This is the core of the solution. The aspect's `handleClientAspect` method will now contain the `try-catch` block to handle `KubernetesClientException`, detect a `401` error, and then decide whether to refresh the static client or invalidate the user's session.
+
+**`com/barclays/iportalmonitoring/aspect/OpenShiftClientAspect.java`**
+
+```java
+import io.fabric8.kubernetes.client.KubernetesClientException;
+// ... all other imports
+
+@Aspect
+@Component
+public class OpenShiftClientAspect {
+
+    private static final Logger log = LoggerFactory.getLogger(OpenShiftClientAspect.class);
+
+    // ... constructor and fields remain the same
+
+    @Around("@annotation(com.barclays.iportalmonitoring.annotation.UseOpenShiftClient)")
+    public Object handleClientAspect(ProceedingJoinPoint joinPoint) throws Throwable {
+        String cluster = findClusterIdentifier(joinPoint);
+        
+        // Determine if we are in a user session context before the try block
+        HttpSession session = request.getSession(false);
+        String tokenKey = cluster + "_token";
+        boolean isUserSession = (session != null && session.getAttribute(tokenKey) != null);
+
+        // Set the appropriate client (user or static)
+        setupClient(cluster, session, isUserSession);
+
+        try {
+            // Proceed with the original method execution
+            return joinPoint.proceed();
+
+        } catch (KubernetesClientException e) {
+            // Check if the token expired
+            if (e.getCode() == 401) { 
+                if (isUserSession) {
+                    // --- USER TOKEN EXPIRED ---
+                    // Cannot refresh without credentials. Invalidate the session to force re-login.
+                    log.warn("User session token for cluster '{}' has expired. Invalidating session.", cluster);
+                    session.invalidate();
+                    // Re-throw the exception to send a 401 to the client.
+                    throw e; 
+
+                } else {
+                    // --- STATIC TOKEN EXPIRED ---
+                    // We have the static credentials, so we can refresh the clients and retry.
+                    log.info("Static client token for cluster '{}' expired. Re-initializing and retrying.", cluster);
+                    
+                    // 1. Re-initialize the static clients
+                    openShiftService.reinitializeStaticClients();
+                    
+                    // 2. Re-setup the ThreadLocal with the NEW static client for the retry
+                    setupClient(cluster, null, false); // call setup again in static mode
+
+                    // 3. Retry the operation
+                    log.info("Retrying original operation...");
+                    return joinPoint.proceed();
+                }
+            }
+            // For any other Kubernetes exception, just re-throw it
+            throw e;
+        } finally {
+            // IMPORTANT: Always clear the ThreadLocal
+            openShiftService.clearActiveClient();
+        }
+    }
+
+    /**
+     * Helper method to set up the client in the ThreadLocal context.
+     */
+    private void setupClient(String cluster, HttpSession session, boolean isUserSession) {
+        if (isUserSession) {
+            String tokenKey = cluster + "_token";
+            String token = (String) session.getAttribute(tokenKey);
+            OpenShiftClient userClient = applicationContext.getBean(OpenShiftClient.class, cluster, token);
+            openShiftService.setActiveClient(userClient);
+        } else {
+            openShiftService.setStaticClientForRequest(cluster);
+        }
+    }
+
+    // Your private findClusterIdentifier method remains the same.
+    private String findClusterIdentifier(ProceedingJoinPoint joinPoint) { ... }
+}
+```
+
+### Summary of Changes & How It Works
+
+1.  **Centralized Refresh**: The `OpenShiftServiceImpl` now has a `synchronized reinitializeStaticClients()` method. This is the single, thread-safe way to refresh the application's default clients.
+
+2.  **Intelligent Exception Handling**: The `OpenShiftClientAspect` is now the central point for handling token expiry.
+
+3.  **User Session Flow**:
+
+      * An API call is made by a logged-in user.
+      * The aspect sets up a client using the session token.
+      * The call to OpenShift fails with a `401`.
+      * The `catch` block executes, sees it's a user session (`isUserSession` is true), invalidates the session, and throws the exception. Your frontend should catch this `401 Unauthorized` response and redirect the user to the login page.
+
+4.  **Static Client Flow**:
+
+      * An API call is made by an unauthenticated user.
+      * The aspect sets up a static client.
+      * The call to OpenShift fails with a `401`.
+      * The `catch` block executes, sees it's a static client (`isUserSession` is false), and calls `reinitializeStaticClients()`.
+      * It then sets the **newly created** static client for the current request and calls `joinPoint.proceed()` again, seamlessly retrying the operation. The end-user never knows the token was refreshed.
