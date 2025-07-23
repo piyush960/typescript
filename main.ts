@@ -1,468 +1,379 @@
-Of course. Here is the complete, modified code that implements the dual-mode authentication logic.
+Of course. Here is the complete Angular frontend code to integrate with the Spring Boot backend you've built.
 
-The application will now:
+This solution includes session management via cookies, automatic handling of expired tokens, and route protection.
 
-1.  Initialize **static, read-only clients** at startup for a default dashboard view.
-2.  Upon user login, create a session and use the provided credentials to generate **user-specific tokens**.
-3.  For subsequent requests from a logged-in user, the aspect will use the **session tokens**. For unauthenticated requests, it will fall back to the **static clients**.
+### \#\# 1. Setup Proxy for Development
+
+To avoid CORS errors when your Angular app (e.g., on `localhost:4200`) calls your backend (on `localhost:8080`), create a proxy.
+
+1.  Create a file named `proxy.conf.json` in the root of your Angular project.
+
+    **`proxy.conf.json`**
+
+    ```json
+    {
+      "/api": {
+        "target": "http://localhost:8080",
+        "secure": false,
+        "logLevel": "debug"
+      }
+    }
+    ```
+
+2.  Update your `angular.json` file to use this proxy. Find the `serve` configuration and add the `proxyConfig` option.
+
+    **`angular.json`**
+
+    ```json
+    ...
+    "architect": {
+      "serve": {
+        "builder": "@angular-devkit/build-angular:dev-server",
+        "options": {
+          "proxyConfig": "proxy.conf.json"
+        },
+    ...
+    ```
+
+3.  Restart your Angular development server (`ng serve`) for the changes to take effect.
 
 -----
 
-### \#\# 1. Configure Static Credentials
+### \#\# 2. Authentication Service
 
-Add the static username and password to your `application.properties` file. These will be used for the initial, read-only dashboard state.
+This service will handle login, logout, and manage the user's authentication state within the app.
 
-**`src/main/resources/application.properties`**
+**`src/app/auth/auth.service.ts`**
 
-```properties
-# ... (H2, Spring Session, and other properties remain the same)
+```typescript
+import { Injectable } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { BehaviorSubject, Observable, of } from 'rxjs';
+import { tap, catchError } from 'rxjs/operators';
+import { Router } from '@angular/router';
 
-# Your OpenShift properties
-openshift.gl.api.server=...
-openshift.sl.api.server=...
-openshift.gl.auth.server=...
-openshift.sl.auth.server=...
+@Injectable({
+  providedIn: 'root'
+})
+export class AuthService {
+  // BehaviorSubject to hold the authentication state
+  private loggedIn = new BehaviorSubject<boolean>(false);
+  
+  // Expose the authentication state as an Observable
+  isLoggedIn$: Observable<boolean> = this.loggedIn.asObservable();
 
-# STATIC credentials for initial read-only dashboard view
-openshift.static.username=your-static-readonly-user
-openshift.static.password=your-static-readonly-password
-```
+  constructor(private http: HttpClient, private router: Router) {
+    // Note: A robust app might check for an active session on startup,
+    // but for cookie-based auth, the interceptor handles this implicitly.
+  }
 
------
+  get isLoggedIn(): boolean {
+    return this.loggedIn.getValue();
+  }
 
-### \#\# 2. Update the Token Provider
+  login(credentials: { username: string; password: string }): Observable<any> {
+    // The interceptor will add withCredentials: true
+    return this.http.post('/api/auth/login', credentials).pipe(
+      tap(() => {
+        this.loggedIn.next(true);
+        this.router.navigate(['/dashboard']);
+      }),
+      catchError((error) => {
+        this.loggedIn.next(false);
+        // Let the component handle displaying the error message
+        throw error; 
+      })
+    );
+  }
 
-The `TokenProvider` will now be used to fetch tokens for both the static user at startup and dynamic users at login.
+  logout() {
+    // The interceptor will add withCredentials: true
+    this.http.post('/api/auth/logout', {}).subscribe(() => {
+      this.handleLogout();
+    });
+  }
 
-**`com/barclays/iportalmonitoring/service/impl/TokenProviderImpl.java`**
-
-```java
-import java.util.Base64;
-// ... other imports
-
-@Component
-public class TokenProviderImpl implements TokenProvider {
-
-    private final String glAuthServerUrl;
-    private final String slAuthServerUrl;
-
-    // Inject properties
-    @Autowired
-    public TokenProviderImpl(@Value("${openshift.gl.auth.server}") String glAuthServerUrl,
-                             @Value("${openshift.sl.auth.server}") String slAuthServerUrl) {
-        this.glAuthServerUrl = glAuthServerUrl;
-        this.slAuthServerUrl = slAuthServerUrl;
-    }
-    
-    /**
-     * Public method to fetch a token for a specific user during login.
-     */
-    public String fetchTokenForUser(String cluster, String username, String password) {
-        String clusterAuthUrl = "gl".equalsIgnoreCase(cluster) ? this.glAuthServerUrl : this.slAuthServerUrl;
-        return fetchOAuthToken(clusterAuthUrl, username, password);
-    }
-    
-    /**
-     * Generic, private method to fetch any OAuth token.
-     */
-    private String fetchOAuthToken(String clusterURL, String username, String password) {
-        String authToken = "";
-        try {
-            String credentials = username + ":" + password;
-            String encodedCredentials = Base64.getEncoder().encodeToString(credentials.getBytes());
-
-            URL url = new URL(clusterURL + "/oauth/authorize?response_type=token&client_id=openshift-challenging-client");
-            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-            connection.setRequestMethod("GET");
-            connection.setRequestProperty("Authorization", "Basic " + encodedCredentials);
-            connection.setInstanceFollowRedirects(false);
-
-            int responseCode = connection.getResponseCode();
-
-            if (responseCode == HttpURLConnection.HTTP_MOVED_TEMP) {
-                String location = connection.getHeaderField("Location");
-                authToken = location.split("#")[1].split("&")[0].split("=")[1];
-            } else {
-                throw new RuntimeException("Failed to fetch OpenShift OAuth token. Response Code: " + responseCode);
-            }
-        } catch (Exception e) {
-            // Proper logging should be here
-            throw new RuntimeException("Error fetching token for user " + username, e);
-        }
-        return authToken;
-    }
+  // Centralized logout logic for the app
+  handleLogout() {
+    this.loggedIn.next(false);
+    this.router.navigate(['/login']);
+  }
 }
 ```
 
 -----
 
-### \#\# 3. Refactor the OpenShift Service
+### \#\# 3. HTTP Interceptor
 
-This service will now initialize and hold the **static clients** and manage the `ThreadLocal` for the active client of any given request.
+This is the most critical piece. It automatically attaches credentials to every request and handles `401 Unauthorized` errors globally by logging the user out.
 
-**`com/barclays/iportalmonitoring/service/impl/OpenShiftServiceImpl.java`**
+**`src/app/auth/auth.interceptor.ts`**
 
-```java
-import io.fabric8.openshift.client.OpenShiftClient;
-import jakarta.annotation.PostConstruct;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.ApplicationContext;
-import org.springframework.stereotype.Service;
+```typescript
+import { Injectable } from '@angular/core';
+import {
+  HttpRequest,
+  HttpHandler,
+  HttpEvent,
+  HttpInterceptor,
+  HttpErrorResponse
+} from '@angular/common/http';
+import { Observable, throwError } from 'rxjs';
+import { catchError } from 'rxjs/operators';
+import { AuthService } from './auth.service';
 
-@Service
-public class OpenShiftServiceImpl implements OpenShiftService {
+@Injectable()
+export class AuthInterceptor implements HttpInterceptor {
 
-    private static final Logger log = LoggerFactory.getLogger(OpenShiftServiceImpl.class);
+  constructor(private authService: AuthService) {}
 
-    // Injected dependencies for initialization
-    private final ApplicationContext applicationContext;
-    private final TokenProvider tokenProvider;
-    private final String staticUsername;
-    private final String staticPassword;
+  intercept(request: HttpRequest<unknown>, next: HttpHandler): Observable<HttpEvent<unknown>> {
+    // Clone the request to add the withCredentials option
+    const authReq = request.clone({
+      withCredentials: true
+    });
 
-    // Static clients initialized at startup
-    private OpenShiftClient staticClientGL;
-    private OpenShiftClient staticClientSL;
-
-    // ThreadLocal holds the client (either static or user-specific) for the current request
-    private final ThreadLocal<OpenShiftClient> activeClient = new ThreadLocal<>();
-
-    @Autowired
-    public OpenShiftServiceImpl(ApplicationContext applicationContext, TokenProvider tokenProvider,
-                                @Value("${openshift.static.username}") String staticUsername,
-                                @Value("${openshift.static.password}") String staticPassword) {
-        this.applicationContext = applicationContext;
-        this.tokenProvider = tokenProvider;
-        this.staticUsername = staticUsername;
-        this.staticPassword = staticPassword;
-    }
-
-    @PostConstruct
-    public void initializeStaticClients() {
-        log.info("Initializing static OpenShift clients for read-only access...");
-        try {
-            String tokenGL = tokenProvider.fetchTokenForUser("gl", staticUsername, staticPassword);
-            this.staticClientGL = applicationContext.getBean(OpenShiftClient.class, "gl", tokenGL);
-
-            String tokenSL = tokenProvider.fetchTokenForUser("sl", staticUsername, staticPassword);
-            this.staticClientSL = applicationContext.getBean(OpenShiftClient.class, "sl", tokenSL);
-
-            log.info("Static OpenShift clients initialized successfully.");
-        } catch (Exception e) {
-            log.error("FATAL: Could not initialize static OpenShift clients! Dashboard may be non-functional.", e);
+    return next.handle(authReq).pipe(
+      catchError((error: HttpErrorResponse) => {
+        // If the error is 401, the session is invalid or expired
+        if (error.status === 401) {
+          console.error('Session expired or unauthorized. Logging out.');
+          this.authService.handleLogout();
         }
-    }
-
-    @Override
-    public OpenShiftClient getActiveClient() {
-        OpenShiftClient client = activeClient.get();
-        if (client == null) {
-            throw new IllegalStateException("No active OpenShift client is set for this request.");
-        }
-        return client;
-    }
-
-    public void setActiveClient(OpenShiftClient client) {
-        activeClient.set(client);
-    }
-    
-    public void setStaticClientForRequest(String clusterIdentifier) {
-        if ("gl".equalsIgnoreCase(clusterIdentifier)) {
-            activeClient.set(staticClientGL);
-        } else if ("sl".equalsIgnoreCase(clusterIdentifier)) {
-            activeClient.set(staticClientSL);
-        } else {
-            throw new IllegalArgumentException("Unknown cluster identifier for static client: " + clusterIdentifier);
-        }
-    }
-
-    public void clearActiveClient() {
-        activeClient.remove();
-    }
-}
-```
-
-*Note: Add `setStaticClientForRequest` to your `OpenShiftService` interface if it exists.*
-
------
-
-### \#\# 4. Update the AOP Aspect (Core Logic)
-
-The aspect is the orchestrator. It checks for a user session. If a session exists, it creates a user-specific client. If not, it falls back to a static client.
-
-**`com/barclays/iportalmonitoring/aspect/OpenShiftClientAspect.java`**
-
-```java
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpSession;
-import org.aspectj.lang.ProceedingJoinPoint;
-import org.aspectj.lang.annotation.Around;
-import org.aspectj.lang.annotation.Aspect;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationContext;
-import org.springframework.stereotype.Component;
-
-@Aspect
-@Component
-public class OpenShiftClientAspect {
-
-    private final OpenShiftServiceImpl openShiftService;
-    private final ApplicationContext applicationContext;
-    private final HttpServletRequest request;
-
-    @Autowired
-    public OpenShiftClientAspect(OpenShiftServiceImpl openShiftService, ApplicationContext applicationContext, HttpServletRequest request) {
-        this.openShiftService = openShiftService;
-        this.applicationContext = applicationContext;
-        this.request = request;
-    }
-
-    @Around("@annotation(com.barclays.iportalmonitoring.annotation.UseOpenShiftClient)")
-    public Object handleClientAspect(ProceedingJoinPoint joinPoint) throws Throwable {
-        String cluster = findClusterIdentifier(joinPoint);
-        HttpSession session = request.getSession(false); // false = don't create a new session
-
-        String tokenKey = cluster + "_token";
-        
-        // Check if a user session exists and has the required token
-        if (session != null && session.getAttribute(tokenKey) != null) {
-            // --- USER-SPECIFIC CLIENT FLOW ---
-            String token = (String) session.getAttribute(tokenKey);
-            // The OpenShiftClient bean MUST be @Scope("prototype")
-            OpenShiftClient userClient = applicationContext.getBean(OpenShiftClient.class, cluster, token);
-            openShiftService.setActiveClient(userClient);
-            
-        } else {
-            // --- STATIC CLIENT FALLBACK FLOW ---
-            openShiftService.setStaticClientForRequest(cluster);
-        }
-
-        try {
-            return joinPoint.proceed();
-        } finally {
-            // IMPORTANT: Always clear the ThreadLocal after the request is complete
-            openShiftService.clearActiveClient();
-        }
-    }
-
-    // Your existing private findClusterIdentifier method
-    private String findClusterIdentifier(ProceedingJoinPoint joinPoint) { ... }
+        return throwError(() => error);
+      })
+    );
+  }
 }
 ```
 
 -----
 
-### \#\# 5. Controller and Security
+### \#\# 4. Route Guard
 
-Your `AuthController` for logging in remains unchanged, as its job is simply to populate the session. The auditing aspect also requires no changes.
+This guard protects routes like the dashboard, preventing access if the user isn't logged in according to the `AuthService`.
 
-#### **Login Controller (No Changes)**
+**`src/app/auth/auth.guard.ts`**
 
-The `AuthController` you had before is perfect. When a user calls `/api/auth/login`, it will create the session attributes (`username`, `gl_token`, `sl_token`) that the `OpenShiftClientAspect` looks for.
+```typescript
+import { Injectable } from '@angular/core';
+import { CanActivate, Router } from '@angular/router';
+import { AuthService } from './auth.service';
 
-#### **Security Configuration**
+@Injectable({
+  providedIn: 'root'
+})
+export class AuthGuard implements CanActivate {
 
-Ensure your security configuration allows unauthenticated access to the endpoints that should work in the read-only mode.
+  constructor(private authService: AuthService, private router: Router) {}
 
-**`com/barclays/iportalmonitoring/config/SecurityConfig.java`**
-
-```java
-@Configuration
-@EnableWebSecurity
-public class SecurityConfig {
-
-    @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        http
-            .csrf(csrf -> csrf.disable()) // Disable CSRF for stateless APIs if appropriate
-            .authorizeHttpRequests(authz -> authz
-                // Allow login/logout endpoints for everyone
-                .requestMatchers("/api/auth/login", "/api/auth/logout").permitAll()
-                // Allow unauthenticated access to H2 console
-                .requestMatchers("/h2-console/**").permitAll()
-                // Allow read-only dashboard endpoints for everyone (they will use the static client)
-                .requestMatchers(HttpMethod.GET, "/api/pods/**", "/api/services/**").permitAll()
-                // Require authentication for all other requests (e.g., POST, DELETE)
-                .anyRequest().authenticated()
-            )
-            // This allows the h2-console to be rendered in a frame
-            .headers(headers -> headers.frameOptions(frameOptions -> frameOptions.sameOrigin()));
-            
-        return http.build();
+  canActivate(): boolean {
+    if (this.authService.isLoggedIn) {
+      return true;
+    } else {
+      // Redirect to login page if not authenticated
+      this.router.navigate(['/login']);
+      return false;
     }
-}
-```
-
-This configuration secures your application while allowing the dual-mode functionality you requested.
-
-
-    Of course. Here is the updated code that re-integrates your token refresh and retry logic into the new dual-mode system.
-
-This implementation correctly distinguishes between an expired **user session token** (which requires re-login) and an expired **static client token** (which can be refreshed automatically).
-
------
-
-### \#\# 1. Update the OpenShift Service
-
-First, we'll modify the `OpenShiftServiceImpl` to make the static client initialization method `synchronized` and reusable. This ensures that if multiple requests detect the expired static token simultaneously, they won't all try to re-initialize it at once.
-
-**`com/barclays/iportalmonitoring/service/impl/OpenShiftServiceImpl.java`**
-
-```java
-// ... other imports
-import jakarta.annotation.PostConstruct;
-
-@Service
-public class OpenShiftServiceImpl implements OpenShiftService {
-
-    // ... all existing fields (log, applicationContext, tokenProvider, etc.) remain the same
-
-    // The constructor remains the same
-    @Autowired
-    public OpenShiftServiceImpl(...) { ... }
-
-    /**
-     * This method runs once at startup to perform the initial client setup.
-     */
-    @PostConstruct
-    public void initialSetup() {
-        reinitializeStaticClients();
-    }
-
-    /**
-     * Re-initializes the static, read-only clients. This method is synchronized
-     * to prevent race conditions if multiple threads detect an expired token.
-     * It's now the single source for creating/refreshing static clients.
-     */
-    public synchronized void reinitializeStaticClients() {
-        log.info("Initializing/Refreshing static OpenShift clients...");
-        try {
-            String tokenGL = tokenProvider.fetchTokenForUser("gl", staticUsername, staticPassword);
-            this.staticClientGL = applicationContext.getBean(OpenShiftClient.class, "gl", tokenGL);
-
-            String tokenSL = tokenProvider.fetchTokenForUser("sl", staticUsername, staticPassword);
-            this.staticClientSL = applicationContext.getBean(OpenShiftClient.class, "sl", tokenSL);
-
-            log.info("Static OpenShift clients initialized/refreshed successfully.");
-        } catch (Exception e) {
-            log.error("FATAL: Could not initialize static OpenShift clients!", e);
-        }
-    }
-
-    // ... all other methods (getActiveClient, setActiveClient, etc.) remain the same
+  }
 }
 ```
 
 -----
 
-### \#\# 2. Update the AOP Aspect with Refresh Logic
+### \#\# 5. Module and Routing Configuration
 
-This is the core of the solution. The aspect's `handleClientAspect` method will now contain the `try-catch` block to handle `KubernetesClientException`, detect a `401` error, and then decide whether to refresh the static client or invalidate the user's session.
+Now, let's wire everything together.
 
-**`com/barclays/iportalmonitoring/aspect/OpenShiftClientAspect.java`**
+#### **`src/app/app.module.ts`**
 
-```java
-import io.fabric8.kubernetes.client.KubernetesClientException;
-// ... all other imports
+```typescript
+import { NgModule } from '@angular/core';
+import { BrowserModule } from '@angular/platform-browser';
+import { HttpClientModule, HTTP_INTERCEPTORS } from '@angular/common/http';
+import { ReactiveFormsModule } from '@angular/forms';
 
-@Aspect
-@Component
-public class OpenShiftClientAspect {
+import { AppRoutingModule } from './app-routing.module';
+import { AppComponent } from './app.component';
+import { LoginComponent } from './login/login.component';
+import { DashboardComponent } from './dashboard/dashboard.component';
+import { AuthInterceptor } from './auth/auth.interceptor';
 
-    private static final Logger log = LoggerFactory.getLogger(OpenShiftClientAspect.class);
+@NgModule({
+  declarations: [
+    AppComponent,
+    LoginComponent,
+    DashboardComponent
+  ],
+  imports: [
+    BrowserModule,
+    AppRoutingModule,
+    HttpClientModule,
+    ReactiveFormsModule
+  ],
+  providers: [
+    // Register the AuthInterceptor
+    { provide: HTTP_INTERCEPTORS, useClass: AuthInterceptor, multi: true }
+  ],
+  bootstrap: [AppComponent]
+})
+export class AppModule { }
+```
 
-    // ... constructor and fields remain the same
+#### **`src/app/app-routing.module.ts`**
 
-    @Around("@annotation(com.barclays.iportalmonitoring.annotation.UseOpenShiftClient)")
-    public Object handleClientAspect(ProceedingJoinPoint joinPoint) throws Throwable {
-        String cluster = findClusterIdentifier(joinPoint);
-        
-        // Determine if we are in a user session context before the try block
-        HttpSession session = request.getSession(false);
-        String tokenKey = cluster + "_token";
-        boolean isUserSession = (session != null && session.getAttribute(tokenKey) != null);
+```typescript
+import { NgModule } from '@angular/core';
+import { RouterModule, Routes } from '@angular/router';
+import { DashboardComponent } from './dashboard/dashboard.component';
+import { LoginComponent } from './login/login.component';
+import { AuthGuard } from './auth/auth.guard';
 
-        // Set the appropriate client (user or static)
-        setupClient(cluster, session, isUserSession);
+const routes: Routes = [
+  { path: 'login', component: LoginComponent },
+  { 
+    path: 'dashboard', 
+    component: DashboardComponent,
+    canActivate: [AuthGuard] // Protect this route
+  },
+  // Redirect empty path to login
+  { path: '', redirectTo: '/login', pathMatch: 'full' },
+  // Wildcard route for a 404 page (optional)
+  { path: '**', redirectTo: '/login' }
+];
 
-        try {
-            // Proceed with the original method execution
-            return joinPoint.proceed();
+@NgModule({
+  imports: [RouterModule.forRoot(routes)],
+  exports: [RouterModule]
+})
+export class AppRoutingModule { }
+```
 
-        } catch (KubernetesClientException e) {
-            // Check if the token expired
-            if (e.getCode() == 401) { 
-                if (isUserSession) {
-                    // --- USER TOKEN EXPIRED ---
-                    // Cannot refresh without credentials. Invalidate the session to force re-login.
-                    log.warn("User session token for cluster '{}' has expired. Invalidating session.", cluster);
-                    session.invalidate();
-                    // Re-throw the exception to send a 401 to the client.
-                    throw e; 
+-----
 
-                } else {
-                    // --- STATIC TOKEN EXPIRED ---
-                    // We have the static credentials, so we can refresh the clients and retry.
-                    log.info("Static client token for cluster '{}' expired. Re-initializing and retrying.", cluster);
-                    
-                    // 1. Re-initialize the static clients
-                    openShiftService.reinitializeStaticClients();
-                    
-                    // 2. Re-setup the ThreadLocal with the NEW static client for the retry
-                    setupClient(cluster, null, false); // call setup again in static mode
+### \#\# 6. Components
 
-                    // 3. Retry the operation
-                    log.info("Retrying original operation...");
-                    return joinPoint.proceed();
-                }
-            }
-            // For any other Kubernetes exception, just re-throw it
-            throw e;
-        } finally {
-            // IMPORTANT: Always clear the ThreadLocal
-            openShiftService.clearActiveClient();
-        }
+Finally, here are the simple components for the UI.
+
+#### **`src/app/login/login.component.ts`**
+
+```typescript
+import { Component } from '@angular/core';
+import { FormBuilder, FormGroup, Validators } from '@angular/forms';
+import { AuthService } from '../auth/auth.service';
+
+@Component({
+  selector: 'app-login',
+  templateUrl: './login.component.html',
+  styleUrls: ['./login.component.css']
+})
+export class LoginComponent {
+  loginForm: FormGroup;
+  errorMessage: string | null = null;
+
+  constructor(private fb: FormBuilder, private authService: AuthService) {
+    this.loginForm = this.fb.group({
+      username: ['', Validators.required],
+      password: ['', Validators.required]
+    });
+  }
+
+  onSubmit() {
+    if (this.loginForm.invalid) {
+      return;
     }
-
-    /**
-     * Helper method to set up the client in the ThreadLocal context.
-     */
-    private void setupClient(String cluster, HttpSession session, boolean isUserSession) {
-        if (isUserSession) {
-            String tokenKey = cluster + "_token";
-            String token = (String) session.getAttribute(tokenKey);
-            OpenShiftClient userClient = applicationContext.getBean(OpenShiftClient.class, cluster, token);
-            openShiftService.setActiveClient(userClient);
-        } else {
-            openShiftService.setStaticClientForRequest(cluster);
-        }
-    }
-
-    // Your private findClusterIdentifier method remains the same.
-    private String findClusterIdentifier(ProceedingJoinPoint joinPoint) { ... }
+    this.errorMessage = null;
+    this.authService.login(this.loginForm.value).subscribe({
+      error: (err) => {
+        this.errorMessage = 'Login failed. Please check your credentials.';
+        console.error(err);
+      }
+    });
+  }
 }
 ```
 
-### Summary of Changes & How It Works
+#### **`src/app/login/login.component.html`**
 
-1.  **Centralized Refresh**: The `OpenShiftServiceImpl` now has a `synchronized reinitializeStaticClients()` method. This is the single, thread-safe way to refresh the application's default clients.
+```html
+<div class="login-container">
+  <h2>Login</h2>
+  <form [formGroup]="loginForm" (ngSubmit)="onSubmit()">
+    <div>
+      <label for="username">Username</label>
+      <input id="username" type="text" formControlName="username">
+    </div>
+    <div>
+      <label for="password">Password</label>
+      <input id="password" type="password" formControlName="password">
+    </div>
+    <button type="submit" [disabled]="loginForm.invalid">Log In</button>
+  </form>
+  <div *ngIf="errorMessage" class="error-message">
+    {{ errorMessage }}
+  </div>
+</div>
+```
 
-2.  **Intelligent Exception Handling**: The `OpenShiftClientAspect` is now the central point for handling token expiry.
+#### **`src/app/dashboard/dashboard.component.ts`**
 
-3.  **User Session Flow**:
+(Assuming you have a `DataService` to fetch data)
 
-      * An API call is made by a logged-in user.
-      * The aspect sets up a client using the session token.
-      * The call to OpenShift fails with a `401`.
-      * The `catch` block executes, sees it's a user session (`isUserSession` is true), invalidates the session, and throws the exception. Your frontend should catch this `401 Unauthorized` response and redirect the user to the login page.
+```typescript
+// Create a data.service.ts if you don't have one
+import { Injectable } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Observable } from 'rxjs';
 
-4.  **Static Client Flow**:
+@Injectable({providedIn: 'root'})
+export class DataService {
+  constructor(private http: HttpClient) { }
+  getPods(): Observable<any[]> {
+    // The interceptor will handle the auth cookie
+    return this.http.get<any[]>('/api/pods'); 
+  }
+}
 
-      * An API call is made by an unauthenticated user.
-      * The aspect sets up a static client.
-      * The call to OpenShift fails with a `401`.
-      * The `catch` block executes, sees it's a static client (`isUserSession` is false), and calls `reinitializeStaticClients()`.
-      * It then sets the **newly created** static client for the current request and calls `joinPoint.proceed()` again, seamlessly retrying the operation. The end-user never knows the token was refreshed.
+// dashboard.component.ts
+import { Component, OnInit } from '@angular/core';
+import { DataService } from '../data.service'; // Adjust path if needed
+import { AuthService } from '../auth/auth.service';
+import { Observable } from 'rxjs';
+
+@Component({
+  selector: 'app-dashboard',
+  templateUrl: './dashboard.component.html',
+})
+export class DashboardComponent implements OnInit {
+  pods$: Observable<any[]>;
+
+  constructor(private dataService: DataService, private authService: AuthService) {}
+
+  ngOnInit(): void {
+    // Fetch data from a protected endpoint
+    this.pods$ = this.dataService.getPods();
+  }
+
+  logout() {
+    this.authService.logout();
+  }
+}
+```
+
+#### **`src/app/dashboard/dashboard.component.html`**
+
+```html
+<div>
+  <h2>Dashboard</h2>
+  <button (click)="logout()">Logout</button>
+  
+  <h3>OpenShift Pods (from GL or SL cluster)</h3>
+  <div *ngIf="pods$ | async as pods; else loading">
+    <ul *ngIf="pods.length > 0; else noPods">
+      <li *ngFor="let pod of pods">{{ pod.metadata.name }}</li>
+    </ul>
+    <ng-template #noPods><p>No pods found.</p></ng-template>
+  </div>
+  <ng-template #loading><p>Loading pods...</p></ng-template>
+</div>
+```
