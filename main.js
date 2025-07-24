@@ -1,31 +1,12 @@
-Yes, you can absolutely implement this yourself without using the built-in side bar. You can create a separate Angular component that interacts with the AG Grid API to show and hide columns.
+Of course. We can enhance the custom panel to be a dropdown menu and to visually group the columns just like they appear in the grid.
 
-This approach gives you full control over the look and feel of your column selector.
-
------
-
-### The Strategy 💡
-
-1.  **Create a new component** to act as your custom tool panel.
-2.  **Pass the Grid API** from your main component (that hosts the grid) to this new panel component.
-3.  In the new component, use the API to **get a list of all columns** and display them with checkboxes.
-4.  When a checkbox is clicked, use the API to **set the visibility** of the corresponding column in the grid.
+Here is the updated implementation.
 
 -----
 
-### Step 1: Create the Custom Control Panel Component
+### 1\. Update the Logic (`column-toggle-panel.component.ts`) ⚙️
 
-First, generate a new component using the Angular CLI.
-
-```bash
-ng generate component column-toggle-panel
-```
-
------
-
-### Step 2: Build the Logic (`column-toggle-panel.component.ts`) ⚙️
-
-This component will receive the `gridApi`, get the column data, and handle the toggle logic.
+We'll add a flag to control the dropdown's visibility and modify our `ColumnState` to include the group name, which we'll use for adding separators.
 
 ```typescript
 // src/app/column-toggle-panel/column-toggle-panel.component.ts
@@ -37,6 +18,8 @@ interface ColumnState {
   colId: string;
   headerName: string | undefined;
   hide: boolean | undefined;
+  // ✅ Add property to store the parent group's name
+  groupName: string | null;
 }
 
 @Component({
@@ -48,9 +31,10 @@ export class ColumnTogglePanelComponent implements OnChanges {
   @Input() gridApi: GridApi | undefined;
   
   public columnStates: ColumnState[] = [];
+  // ✅ Add property to manage dropdown visibility
+  public isDropdownOpen = false;
 
   ngOnChanges(changes: SimpleChanges): void {
-    // When the gridApi is passed in, initialize the column states
     if (changes['gridApi'] && this.gridApi) {
       this.syncColumnStates();
     }
@@ -60,95 +44,126 @@ export class ColumnTogglePanelComponent implements OnChanges {
     if (!this.gridApi) return;
     
     const allColumns: Column[] = this.gridApi.getColumns() || [];
-    this.columnStates = allColumns.map(column => ({
-      colId: column.getColId(),
-      headerName: column.getColDef().headerName,
-      hide: column.isVisible() === false,
-    }));
+    this.columnStates = allColumns.map(column => {
+      const parent = column.getParent;
+      return {
+        colId: column.getColId(),
+        headerName: column.getColDef().headerName,
+        hide: column.isVisible() === false,
+        // ✅ Get the group name from the parent column
+        groupName: parent ? parent.getColDef().headerName || null : null
+      };
+    });
   }
 
   onColumnToggle(event: any, colId: string): void {
     if (!this.gridApi) return;
-
-    const isChecked = event.target.checked;
-    this.gridApi.setColumnsVisible([colId], isChecked);
+    this.gridApi.setColumnsVisible([colId], event.target.checked);
+  }
+  
+  // ✅ Add method to toggle the dropdown
+  toggleDropdown(): void {
+    this.isDropdownOpen = !this.isDropdownOpen;
   }
 }
 ```
 
 -----
 
-### Step 3: Create the UI (`column-toggle-panel.component.html`) 🖼️
+### 2\. Update the UI (`column-toggle-panel.component.html`) 🖼️
 
-This is the template with the list of checkboxes.
+Here, we'll change the static list into a dropdown menu and add logic inside the `*ngFor` loop to render a header whenever the column group changes.
 
 ```html
-<div class="column-panel-container">
-  <h4>Show/Hide Columns</h4>
-  <div *ngFor="let col of columnStates" class="column-item">
-    <label>
-      <input 
-        type="checkbox"
-        [checked]="!col.hide"
-        (change)="onColumnToggle($event, col.colId)"
-      />
-      {{ col.headerName }}
-    </label>
+<div class="dropdown-container">
+  <button (click)="toggleDropdown()" class="dropdown-button">
+    Show/Hide Columns ▾
+  </button>
+
+  <div *ngIf="isDropdownOpen" class="dropdown-menu">
+    <div *ngFor="let col of columnStates; let i = index" class="dropdown-item">
+
+      <div *ngIf="col.groupName && (i === 0 || col.groupName !== columnStates[i-1].groupName)">
+        <strong class="group-header">{{ col.groupName }}</strong>
+        <hr class="group-separator">
+      </div>
+      
+      <label>
+        <input 
+          type="checkbox"
+          [checked]="!col.hide"
+          (change)="onColumnToggle($event, col.colId)"
+        />
+        <span class="column-label">{{ col.headerName }}</span>
+      </label>
+    </div>
   </div>
 </div>
 ```
 
-You can add some basic styling in `column-toggle-panel.component.css`:
-
-```css
-.column-panel-container {
-  border: 1px solid #ccc;
-  padding: 10px;
-  margin-bottom: 10px;
-  max-width: 300px;
-}
-.column-item {
-  display: block;
-  margin-bottom: 5px;
-}
-```
-
 -----
 
-### Step 4: Integrate into Your Main Component 🔗
+### 3\. Add Dropdown Styles (`column-toggle-panel.component.css`) 🎨
 
-Finally, use your new component alongside your grid and pass the `gridApi` to it.
+Add these styles to make the component look and behave like a dropdown menu.
 
-**In your main component's `.ts` file (e.g., `app.component.ts`)**:
-Make sure you are saving the `gridApi` from the `onGridReady` event.
+```css
+/* src/app/column-toggle-panel/column-toggle-panel.component.css */
 
-```typescript
-// src/app/app.component.ts
+.dropdown-container {
+  position: relative; /* Establishes a positioning context */
+  display: inline-block;
+  margin-bottom: 10px;
+}
 
-export class AppComponent {
-  public gridApi!: GridApi; // Ensure this is public
+.dropdown-button {
+  background-color: #f0f0f0;
+  border: 1px solid #ccc;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  min-width: 180px;
+  text-align: left;
+}
 
-  // ... your other properties ...
+.dropdown-menu {
+  position: absolute;
+  background-color: white;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+  padding: 10px;
+  z-index: 1000; /* Ensures it appears above other content */
+  min-width: 250px;
+  max-height: 400px;
+  overflow-y: auto;
+}
 
-  onGridReady(params: GridReadyEvent) {
-    this.gridApi = params.api;
-  }
+.dropdown-item label {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.column-label {
+  margin-left: 8px;
+}
+
+.group-header {
+  display: block;
+  font-size: 0.9em;
+  color: #555;
+  margin-top: 10px;
+  padding-left: 2px;
+}
+
+.group-separator {
+  border: 0;
+  border-top: 1px solid #eee;
+  margin: 4px 0 8px 0;
 }
 ```
 
-**In your main component's `.html` file (e.g., `app.component.html`)**:
-
-```html
-<app-column-toggle-panel [gridApi]="gridApi"></app-column-toggle-panel>
-
-<ag-grid-angular
-  style="width: 100%; height: 500px;"
-  class="ag-theme-quartz"
-  [rowData]="rowData"
-  [columnDefs]="columnDefs"
-  (gridReady)="onGridReady($event)"
->
-</ag-grid-angular>
-```
-
-Now you have a fully custom component for toggling column visibility that is completely independent of the built-in side bar feature.
+Now your custom component is a dropdown that neatly groups your "Gloucester" and "Slough" columns with headers and separators, just like in the grid itself.
