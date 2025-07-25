@@ -1,157 +1,136 @@
-Of course. Your Spring Boot backend is perfectly configured for Server-Sent Events (SSE) using WebFlux, but your Angular frontend is using a standard one-time `HttpClient` request.
-
-To achieve real-time streaming, you need to switch the frontend to use the browser's native **`EventSource` API**, which is designed specifically for consuming SSE streams. Here is the step-by-step guide to integrate it.
-
------
-
-### Backend Check: All Good\! 👍
-
-Your backend code is already correct and requires **no changes**.
-
-  * `ProjectController.java`: The `@GetMapping` with `produces = MediaType.TEXT_EVENT_STREAM_VALUE` correctly sets up the SSE endpoint.
-  * `ProjectServiceImpl.java`: Using `Flux.create` with the Fabric8 `watch` API is the right way to create a reactive stream of OpenShift events.
-
------
-
-### Frontend Integration: From REST to Real-Time Streaming
-
-We'll modify your `ApiHttpService` to handle the stream and update your `EventsComponent` to subscribe to it and update the UI in real-time.
-
-#### 1\. Update Your `ApiHttpService`
-
-Create a new method that uses `EventSource` and wraps it in an Angular `Observable`. This makes it easy to manage within your component's lifecycle. We'll assume your service file is named `api-http.service.ts`.
-
-```typescript
-// src/app/services/api-http.service.ts
-import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { Observable } from 'rxjs';
-
-// ... (keep your existing service code)
-
-@Injectable({
-  providedIn: 'root'
-})
-export class ApiHttpService {
-  private baseUrl = '/api/portal'; // Adjust if your proxy is different
-
-  constructor(private http: HttpClient) { }
-
-  // KEEP YOUR EXISTING getEventsForProjectAndCluster for other purposes if needed
-
-  /**
-   * Creates a real-time stream of events for a given project and cluster.
-   * @param project The project name.
-   * @param cluster The cluster identifier ('g1' or 's1').
-   * @returns An Observable that emits events as they arrive from the server.
-   */
-  streamEventsForProjectAndCluster(project: string, cluster: string): Observable<any> {
-    const url = `${this.baseUrl}/events/project/${project}?cluster=${cluster}`;
-
-    return new Observable(observer => {
-      // Create a new EventSource connection to the backend endpoint
-      const eventSource = new EventSource(url);
-
-      // onmessage is called when a new event is pushed from the server
-      eventSource.onmessage = event => {
-        // The backend sends JSON strings, so we parse them
-        const jsonEvent = JSON.parse(event.data);
-        observer.next(jsonEvent);
-      };
-
-      // onerror handles any connection errors
-      eventSource.onerror = error => {
-        observer.error(error);
-        eventSource.close(); // Close the connection on error
-      };
-
-      // This function is called when the Observable is unsubscribed from.
-      // It's crucial for closing the connection and preventing memory leaks.
-      return () => {
-        eventSource.close();
-      };
-    });
-  }
-}
-```
-
-#### 2\. Update Your `EventsComponent`
-
-Now, modify `events.component.ts` to use the new streaming service method. This involves managing the subscription and updating the event list as new data arrives.
-
-```typescript
-// src/app/components/home-tabs/events/events.component.ts
 import { Component, OnDestroy, OnInit, effect, Input } from '@angular/core';
 import { Subscription } from 'rxjs';
-// ... other imports
+import { trigger, state, style, animate, transition } from '@angular/animations';
+import { MatRadioChange } from '@angular/material/radio';
 
+// Assuming these services are correctly defined elsewhere
+import { AppService } from '../services/app.service';
+import { ApiHttpService } from '../services/api-http.service';
+
+@Component({
+  selector: 'app-events',
+  templateUrl: './events.component.html',
+  styleUrls: ['./events.component.scss'],
+  // Define the animation for new items entering the list
+  animations: [
+    trigger('flyInOut', [
+      transition(':enter', [
+        // Start state: item is transparent and slightly above its final position
+        style({ transform: 'translateY(-20px)', opacity: 0 }),
+        // End state: animate to its final position and full opacity
+        animate('300ms ease-out', style({ transform: 'translateY(0)', opacity: 1 }))
+      ])
+    ])
+  ]
+})
 export class EventsComponent implements OnInit, OnDestroy {
-  // ... (keep your existing properties: button, tabId, title, etc.)
+  // --- Component Properties ---
+  @Input() tabId: number = 5;
+  title = "streaming-events";
+  selectedCluster: 'g1' | 's1' = 'g1';
   eventsData = new Map<string, any[]>();
   isLoading = false;
-  selectedCluster: 'g1' | 's1' = 'g1';
 
-  // ** IMPORTANT: Add a subscription property to manage the connection **
-  private eventSubscription: Subscription;
+  // --- New properties for advanced features ---
+  isStreamingPaused = false;
+  readonly MAX_EVENTS = 50; // Set the maximum number of events to display
+
+  private eventSubscription: Subscription | null = null;
 
   constructor(
     private readonly appService: AppService,
     private readonly apiService: ApiHttpService
   ) {
-    // This effect can stay as it is to clear data when the project changes
+    // Effect to handle project changes
     effect(() => {
         const project = this.appService.selectedProject();
         if (project) {
             this.eventsData = new Map<string, any[]>();
+            // If streaming is not paused, reload events for the new project
+            if (!this.isStreamingPaused) {
+                this.loadEvents();
+            }
         }
     });
 
-    // This effect correctly triggers loading when the tab becomes active
+    // Effect to handle tab activation
     effect(() => {
         const isActiveTab = this.appService.selectedTab() === this.tabId;
         const project = this.appService.selectedProject();
-        if (isActiveTab && project) {
+        if (isActiveTab && project && !this.isStreamingPaused) {
             this.loadEvents();
         }
     });
   }
 
-  // ** IMPORTANT: Implement OnDestroy to clean up the subscription **
-  ngOnDestroy(): void {
-    if (this.eventSubscription) {
-      this.eventSubscription.unsubscribe();
+  ngOnInit(): void {
+    // Initial load if the component is created and not paused
+    if (!this.isStreamingPaused) {
+        this.loadEvents();
     }
   }
 
+  ngOnDestroy(): void {
+    this.unsubscribeFromStream();
+  }
+
+  /**
+   * Toggles the event stream between playing and paused states.
+   */
+  toggleStreaming(): void {
+    this.isStreamingPaused = !this.isStreamingPaused;
+    if (this.isStreamingPaused) {
+      this.unsubscribeFromStream();
+    } else {
+      this.loadEvents();
+    }
+  }
+
+  /**
+   * Safely unsubscribes from the event stream to close the connection.
+   */
+  private unsubscribeFromStream(): void {
+    if (this.eventSubscription) {
+      this.eventSubscription.unsubscribe();
+      this.eventSubscription = null;
+    }
+  }
+
+  /**
+   * Initiates the event stream connection if not paused.
+   */
   loadEvents(): void {
+    if (this.isStreamingPaused) {
+      return; // Do not load events if the stream is paused
+    }
+
     const project = this.appService.selectedProject();
     if (!project) return;
 
-    // ** 1. Unsubscribe from any previous stream to prevent multiple connections **
-    if (this.eventSubscription) {
-      this.eventSubscription.unsubscribe();
-    }
+    this.unsubscribeFromStream(); // Ensure any old connection is closed
 
-    // ** 2. Clear the events for the current cluster and set loading state **
     this.eventsData.set(this.selectedCluster, []);
     this.isLoading = true;
 
-    // ** 3. Subscribe to the NEW streaming method **
     this.eventSubscription = this.apiService
       .streamEventsForProjectAndCluster(project, this.selectedCluster)
       .subscribe({
         next: (newEvent: any) => {
-          this.isLoading = false; // We got our first event, so it's not loading anymore
+          this.isLoading = false;
           this.processAndAddNewEvent(newEvent);
         },
         error: (err) => {
           console.error('SSE Error:', err);
           this.isLoading = false;
+          this.isStreamingPaused = true; // Automatically pause on error
         },
       });
   }
 
-  // ** Renamed from processData to be more descriptive **
+  /**
+   * Processes a new event, formats it, and adds it to the timeline.
+   * Enforces the MAX_EVENTS limit.
+   */
   processAndAddNewEvent(event: any): void {
     const formattedEvent = {
         type: event.type,
@@ -161,36 +140,168 @@ export class EventsComponent implements OnInit, OnDestroy {
         count: event.count,
         generatedFrom: event.resourceKind,
         message: event.message,
-        status: event.type === 'Warning' ? 'warning' : 'normal', // Case-sensitive check
+        status: event.type === 'Warning' ? 'warning' : 'normal',
     };
 
     const currentEvents = this.eventsData.get(this.selectedCluster) || [];
-    // ** Prepend the new event so it appears at the top of the list **
+
+    // Enforce the maximum number of events
+    if (currentEvents.length >= this.MAX_EVENTS) {
+      currentEvents.pop(); // Remove the oldest event from the end of the array
+    }
+
+    // Prepend the new event to the beginning of the array
     this.eventsData.set(this.selectedCluster, [formattedEvent, ...currentEvents]);
   }
 
-  // This function is fine, no changes needed
-  convertToIST(utcTime: string): string {
-    // ... your existing implementation
-  }
-
-  // This function is also fine, it will trigger loadEvents correctly
+  /**
+   * Handles the change of cluster selection.
+   */
   onClusterChange(event: MatRadioChange): void {
     this.selectedCluster = event.value;
-    this.loadEvents();
+    this.loadEvents(); // Reload events for the newly selected cluster
+  }
+
+  /**
+   * Converts a UTC time string to a formatted IST string.
+   */
+  convertToIST(utcTime: string): string {
+    if (!utcTime || utcTime === "null") return "N/A";
+    const date = new Date(utcTime);
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istDate = new Date(date.getTime() + istOffset);
+
+    const dateOptions: Intl.DateTimeFormatOptions = {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: "Asia/Kolkata",
+    };
+
+    return new Intl.DateTimeFormat("en-US", dateOptions)
+      .format(istDate)
+      .replace(" at ", ", ");
   }
 }
-```
 
------
 
-### Summary of Changes 📝
 
-1.  **ApiHttpService:** Added a new `streamEventsForProjectAndCluster` method that uses `EventSource` to connect to your backend's SSE endpoint and wraps the stream in an `Observable`.
-2.  **EventsComponent:**
-      * Added a `private eventSubscription: Subscription;` property to hold the active stream connection.
-      * Implemented the `ngOnDestroy` lifecycle hook to `unsubscribe` and close the connection when the component is destroyed, preventing memory leaks.
-      * Modified `loadEvents` to call the new streaming service method. It now also unsubscribes from old streams before creating a new one (important when switching projects or clusters).
-      * The `subscribe` logic now expects events one-by-one and **prepends** them to the `eventsData` array, making the newest events appear at the top of your timeline instantly.
 
-With these changes, your dashboard will now receive and display events in real-time as they happen in OpenShift.
+
+<b-box [centered]="true">
+  <b-box class="table-container">
+    <mat-radio-group
+      aria-labelledby="example-radio-group-label"
+      class="example-radio-group"
+      [(ngModel)]="selectedCluster"
+      (change)="onClusterChange($event)">
+      <mat-radio-button class="example-radio-button" value="g1">
+        <span u-type="b1">G1</span>
+      </mat-radio-button>
+      <mat-radio-button class="example-radio-button" value="s1">
+        <span u-type="b1">S1</span>
+      </mat-radio-button>
+    </mat-radio-group>
+
+    <div class="container u-type">
+      <div class="timeline-container">
+        <div class="timeline-header">
+          <!-- Make the icon container clickable to toggle streaming -->
+          <div (click)="toggleStreaming()" class="play-pause-icon">
+            <!-- Show PAUSE icon if streaming is active -->
+            <h2 *ngIf="!isStreamingPaused" class="flex items-center">
+              <b-icon icon="pause-circle" status="success"></b-icon>
+              <span>Latest events...</span>
+            </h2>
+            <!-- Show PLAY icon if streaming is paused -->
+            <h2 *ngIf="isStreamingPaused" class="flex items-center">
+              <b-icon icon="play-circle" status="error"></b-icon>
+              <span>Events paused</span>
+            </h2>
+          </div>
+          <span class="event-count">
+            Showing {{ eventsData.get(selectedCluster)?.length || 0 }} events
+          </span>
+        </div>
+
+        <app-loader [text]="'Getting events...'" *ngIf="isLoading"></app-loader>
+
+        <div class="timeline" *ngIf="!isLoading">
+          <!-- Add the animation trigger to each timeline item -->
+          <div *ngFor="let event of eventsData.get(selectedCluster)" [@flyInOut] class="timeline-item">
+            <div [ngClass]="event.status" class="timeline-marker"></div>
+            <div class="timeline-content">
+              <div class="event-header">
+                <div class="event-title">
+                  <span [ngClass]="{
+                    'type-badge-warn': event.type?.toLowerCase() === 'warning',
+                    'type-badge': event.type?.toLowerCase() !== 'warning'
+                  }">{{ event.type }}</span>
+                  <a class="event-name">{{ event.name }}</a>
+                  <span class="ns-badge">NS: {{ event.namespace }}</span>
+                </div>
+              </div>
+              <div class="event-time-info">
+                <span class="time">{{ event.time }}</span>
+                <span class="count">Count: {{ event.count }}</span>
+              </div>
+              <p class="generated-from">
+                <strong>{{ event.generatedFrom }}</strong>
+              </p>
+              <p class="message">{{ event.message }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </b-box>
+</b-box>
+
+
+
+
+
+// Add styles for the new interactive elements
+
+.timeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.play-pause-icon {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  user-select: none; // Prevents text selection on click
+
+  h2 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px; // Space between icon and text
+  }
+}
+
+.event-count {
+  font-size: 0.875rem;
+  color: #6c757d;
+}
+
+// Ensure the timeline item has a position for animations
+.timeline-item {
+  position: relative;
+}
+
+// Your existing styles...
+.table-container {
+  // ...
+}
+
+.type-badge, .type-badge-warn {
+  // ...
+}
