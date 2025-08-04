@@ -1,307 +1,164 @@
-import { Component, OnDestroy, OnInit, effect, Input } from '@angular/core';
-import { Subscription } from 'rxjs';
-import { trigger, state, style, animate, transition } from '@angular/animations';
-import { MatRadioChange } from '@angular/material/radio';
+Of course\! This type of search is often called a "fuzzy search" or "subsequence search". You want to check if one string is a subsequence of another.
 
-// Assuming these services are correctly defined elsewhere
-import { AppService } from '../services/app.service';
-import { ApiHttpService } from '../services/api-http.service';
+Here are two excellent ways to implement this in JavaScript, with explanations for each.
 
-@Component({
-  selector: 'app-events',
-  templateUrl: './events.component.html',
-  styleUrls: ['./events.component.scss'],
-  // Define the animation for new items entering the list
-  animations: [
-    trigger('flyInOut', [
-      transition(':enter', [
-        // Start state: item is transparent and slightly above its final position
-        style({ transform: 'translateY(-20px)', opacity: 0 }),
-        // End state: animate to its final position and full opacity
-        animate('300ms ease-out', style({ transform: 'translateY(0)', opacity: 1 }))
-      ])
-    ])
-  ]
-})
-export class EventsComponent implements OnInit, OnDestroy {
-  // --- Component Properties ---
-  @Input() tabId: number = 5;
-  title = "streaming-events";
-  selectedCluster: 'g1' | 's1' = 'g1';
-  eventsData = new Map<string, any[]>();
-  isLoading = false;
+### Method 1: Simple Iteration (Recommended)
 
-  // --- New properties for advanced features ---
-  isStreamingPaused = false;
-  readonly MAX_EVENTS = 50; // Set the maximum number of events to display
+This approach is straightforward, easy to understand, and very efficient. It iterates through both strings using two pointers (index variables), advancing the pointer for the `query` string only when a character matches.
 
-  private eventSubscription: Subscription | null = null;
+#### The Logic
 
-  constructor(
-    private readonly appService: AppService,
-    private readonly apiService: ApiHttpService
-  ) {
-    // Effect to handle project changes
-    effect(() => {
-        const project = this.appService.selectedProject();
-        if (project) {
-            this.eventsData = new Map<string, any[]>();
-            // If streaming is not paused, reload events for the new project
-            if (!this.isStreamingPaused) {
-                this.loadEvents();
-            }
-        }
-    });
+1.  Create an index variable, `queryIndex`, to keep track of our position in the `query` string.
+2.  Loop through the `target` string, character by character.
+3.  Inside the loop, if the current character in the `target` string matches the character at `queryIndex`, it means we've found the next character in the sequence. So, we increment `queryIndex`.
+4.  If `queryIndex` ever becomes equal to the length of the `query` string, it means we have successfully found all characters from the query in the correct order. We can stop and return `true`.
+5.  If we finish looping through the entire `target` string and haven't found all the query characters, the function returns `false`.
 
-    // Effect to handle tab activation
-    effect(() => {
-        const isActiveTab = this.appService.selectedTab() === this.tabId;
-        const project = this.appService.selectedProject();
-        if (isActiveTab && project && !this.isStreamingPaused) {
-            this.loadEvents();
-        }
-    });
+#### Code
+
+```javascript
+/**
+ * Checks if a query string is a subsequence of a target string.
+ * This is case-sensitive.
+ * @param {string} query The search query characters.
+ * @param {string} target The string to search within.
+ * @returns {boolean} True if the query is a subsequence of the target.
+ */
+function fuzzySearch(query, target) {
+  let queryIndex = 0;
+  let targetIndex = 0;
+
+  // Edge case: an empty query always matches.
+  if (query === "") {
+    return true;
   }
 
-  ngOnInit(): void {
-    // Initial load if the component is created and not paused
-    if (!this.isStreamingPaused) {
-        this.loadEvents();
-    }
-  }
-
-  ngOnDestroy(): void {
-    this.unsubscribeFromStream();
-  }
-
-  /**
-   * Toggles the event stream between playing and paused states.
-   */
-  toggleStreaming(): void {
-    this.isStreamingPaused = !this.isStreamingPaused;
-    if (this.isStreamingPaused) {
-      this.unsubscribeFromStream();
-    } else {
-      this.loadEvents();
-    }
-  }
-
-  /**
-   * Safely unsubscribes from the event stream to close the connection.
-   */
-  private unsubscribeFromStream(): void {
-    if (this.eventSubscription) {
-      this.eventSubscription.unsubscribe();
-      this.eventSubscription = null;
-    }
-  }
-
-  /**
-   * Initiates the event stream connection if not paused.
-   */
-  loadEvents(): void {
-    if (this.isStreamingPaused) {
-      return; // Do not load events if the stream is paused
+  while (targetIndex < target.length) {
+    // If characters match, advance the query index
+    if (target[targetIndex] === query[queryIndex]) {
+      queryIndex++;
     }
 
-    const project = this.appService.selectedProject();
-    if (!project) return;
-
-    this.unsubscribeFromStream(); // Ensure any old connection is closed
-
-    this.eventsData.set(this.selectedCluster, []);
-    this.isLoading = true;
-
-    this.eventSubscription = this.apiService
-      .streamEventsForProjectAndCluster(project, this.selectedCluster)
-      .subscribe({
-        next: (newEvent: any) => {
-          this.isLoading = false;
-          this.processAndAddNewEvent(newEvent);
-        },
-        error: (err) => {
-          console.error('SSE Error:', err);
-          this.isLoading = false;
-          this.isStreamingPaused = true; // Automatically pause on error
-        },
-      });
-  }
-
-  /**
-   * Processes a new event, formats it, and adds it to the timeline.
-   * Enforces the MAX_EVENTS limit.
-   */
-  processAndAddNewEvent(event: any): void {
-    const formattedEvent = {
-        type: event.type,
-        name: event.resourceName,
-        namespace: event.resourceNamespace,
-        time: this.convertToIST(event.eventTimestamp),
-        count: event.count,
-        generatedFrom: event.resourceKind,
-        message: event.message,
-        status: event.type === 'Warning' ? 'warning' : 'normal',
-    };
-
-    const currentEvents = this.eventsData.get(this.selectedCluster) || [];
-
-    // Enforce the maximum number of events
-    if (currentEvents.length >= this.MAX_EVENTS) {
-      currentEvents.pop(); // Remove the oldest event from the end of the array
+    // If we have found all characters of the query, we have a match
+    if (queryIndex === query.length) {
+      return true;
     }
 
-    // Prepend the new event to the beginning of the array
-    this.eventsData.set(this.selectedCluster, [formattedEvent, ...currentEvents]);
+    // Always advance the target index
+    targetIndex++;
   }
 
-  /**
-   * Handles the change of cluster selection.
-   */
-  onClusterChange(event: MatRadioChange): void {
-    this.selectedCluster = event.value;
-    this.loadEvents(); // Reload events for the newly selected cluster
-  }
+  // If we reached the end of the target without finding all query characters
+  return false;
+}
 
-  /**
-   * Converts a UTC time string to a formatted IST string.
-   */
-  convertToIST(utcTime: string): string {
-    if (!utcTime || utcTime === "null") return "N/A";
-    const date = new Date(utcTime);
-    const istOffset = 5.5 * 60 * 60 * 1000;
-    const istDate = new Date(date.getTime() + istOffset);
+// --- Examples ---
 
-    const dateOptions: Intl.DateTimeFormatOptions = {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true,
-        timeZone: "Asia/Kolkata",
-    };
+const str = '"app":"app-name"';
 
-    return new Intl.DateTimeFormat("en-US", dateOptions)
-      .format(istDate)
-      .replace(" at ", ", ");
-  }
+console.log(`Searching for "app" in "${str}"`);
+console.log(fuzzySearch('app', str)); // true ('a'->'p'->'p')
+
+console.log(`Searching for "a:a" in "${str}"`);
+console.log(fuzzySearch('a:a', str)); // true ('a'->':'->'a')
+
+console.log(`Searching for "app=app-name" in "${str}"`);
+console.log(fuzzySearch('app=app-name', str)); // false (the '=' is not in the target string)
+
+console.log(`Searching for "ap:-n" in "${str}"`);
+console.log(fuzzySearch('ap:-n', str)); // true ('a'->'p'->':'->'-'->'n')
+
+console.log(`Searching for "z" in "${str}"`);
+console.log(fuzzySearch('z', str)); // false
+
+console.log(`Searching for "a-p" in "${str}"`);
+console.log(fuzzySearch('a-p', str)); // false (the first 'p' comes before the '-')
+```
+
+#### Case-Insensitive Version
+
+Often, you want search to be case-insensitive. You can achieve this by converting both strings to the same case (e.g., lowercase) before comparing.
+
+```javascript
+function fuzzySearchCaseInsensitive(query, target) {
+  // Convert both to lowercase for comparison
+  return fuzzySearch(query.toLowerCase(), target.toLowerCase());
 }
 
 
+const targetString = "Application Name";
+console.log(fuzzySearchCaseInsensitive("apn", targetString)); // true
+console.log(fuzzySearchCaseInsensitive("ann", targetString)); // true
+console.log(fuzzySearchCaseInsensitive("App Name", targetString)); // true
+```
 
+-----
 
+### Method 2: Regular Expressions
 
-<b-box [centered]="true">
-  <b-box class="table-container">
-    <mat-radio-group
-      aria-labelledby="example-radio-group-label"
-      class="example-radio-group"
-      [(ngModel)]="selectedCluster"
-      (change)="onClusterChange($event)">
-      <mat-radio-button class="example-radio-button" value="g1">
-        <span u-type="b1">G1</span>
-      </mat-radio-button>
-      <mat-radio-button class="example-radio-button" value="s1">
-        <span u-type="b1">S1</span>
-      </mat-radio-button>
-    </mat-radio-group>
+This method is more concise but can be less intuitive if you aren't familiar with regular expressions. We dynamically build a regex pattern from the query string.
 
-    <div class="container u-type">
-      <div class="timeline-container">
-        <div class="timeline-header">
-          <!-- Make the icon container clickable to toggle streaming -->
-          <div (click)="toggleStreaming()" class="play-pause-icon">
-            <!-- Show PAUSE icon if streaming is active -->
-            <h2 *ngIf="!isStreamingPaused" class="flex items-center">
-              <b-icon icon="pause-circle" status="success"></b-icon>
-              <span>Latest events...</span>
-            </h2>
-            <!-- Show PLAY icon if streaming is paused -->
-            <h2 *ngIf="isStreamingPaused" class="flex items-center">
-              <b-icon icon="play-circle" status="error"></b-icon>
-              <span>Events paused</span>
-            </h2>
-          </div>
-          <span class="event-count">
-            Showing {{ eventsData.get(selectedCluster)?.length || 0 }} events
-          </span>
-        </div>
+#### The Logic
 
-        <app-loader [text]="'Getting events...'" *ngIf="isLoading"></app-loader>
+1.  Take the `query` string, e.g., `"apn"`.
+2.  Split it into an array of characters: `['a', 'p', 'n']`.
+3.  Insert `.*` between each character. `.*` is a regex pattern that means "match any character (`.`) zero or more times (`*`)".
+4.  The resulting pattern will be `a.*p.*n`. This regex will match an 'a', followed by anything, followed by a 'p', followed by anything, followed by an 'n'. This is exactly the logic we want.
+5.  Test this new regular expression against the `target` string.
 
-        <div class="timeline" *ngIf="!isLoading">
-          <!-- Add the animation trigger to each timeline item -->
-          <div *ngFor="let event of eventsData.get(selectedCluster)" [@flyInOut] class="timeline-item">
-            <div [ngClass]="event.status" class="timeline-marker"></div>
-            <div class="timeline-content">
-              <div class="event-header">
-                <div class="event-title">
-                  <span [ngClass]="{
-                    'type-badge-warn': event.type?.toLowerCase() === 'warning',
-                    'type-badge': event.type?.toLowerCase() !== 'warning'
-                  }">{{ event.type }}</span>
-                  <a class="event-name">{{ event.name }}</a>
-                  <span class="ns-badge">NS: {{ event.namespace }}</span>
-                </div>
-              </div>
-              <div class="event-time-info">
-                <span class="time">{{ event.time }}</span>
-                <span class="count">Count: {{ event.count }}</span>
-              </div>
-              <p class="generated-from">
-                <strong>{{ event.generatedFrom }}</strong>
-              </p>
-              <p class="message">{{ event.message }}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </b-box>
-</b-box>
+#### Code
 
-
-
-
-
-// Add styles for the new interactive elements
-
-.timeline-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
+```javascript
+/**
+ * Escapes special regex characters in a string.
+ * @param {string} str The string to escape.
+ * @returns {string} The escaped string.
+ */
+function escapeRegex(str) {
+  // Escapes characters with special meaning in regex.
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-.play-pause-icon {
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  user-select: none; // Prevents text selection on click
+/**
+ * Checks if a query is a subsequence of a target using Regex.
+ * @param {string} query The search query.
+ * @param {string} target The string to search within.
+ * @returns {boolean} True if the query is a subsequence of the target.
+ */
+function fuzzySearchRegex(query, target) {
+  // 1. Escape any special regex characters in the user's query.
+  const escapedQuery = escapeRegex(query);
 
-  h2 {
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 8px; // Space between icon and text
-  }
+  // 2. Build the fuzzy search pattern.
+  const pattern = escapedQuery.split('').join('.*');
+  
+  // 3. Create a new RegExp object. 'i' flag makes it case-insensitive.
+  const regex = new RegExp(pattern, 'i'); // 'i' for case-insensitive
+
+  // 4. Test the target string against the pattern.
+  return regex.test(target);
 }
 
-.event-count {
-  font-size: 0.875rem;
-  color: #6c757d;
-}
 
-// Ensure the timeline item has a position for animations
-.timeline-item {
-  position: relative;
-}
+// --- Examples ---
+const str2 = '"app":"app-name"';
 
-// Your existing styles...
-.table-container {
-  // ...
-}
+console.log(fuzzySearchRegex('app', str2));       // true
+console.log(fuzzySearchRegex('a:a', str2));       // true
+console.log(fuzzySearchRegex('ap:-n', str2));     // true
+console.log(fuzzySearchRegex('z', str2));         // false
 
-.type-badge, .type-badge-warn {
-  // ...
-}
+// Example with special regex characters
+const str3 = 'data(v1.0)';
+console.log(fuzzySearchRegex('d(v.0)', str3));    // true, because we escaped the ( and .
+```
+
+### Recommendation
+
+For this specific requirement, **Method 1 (Simple Iteration)** is generally the better choice.
+
+  * **Clarity:** The logic is very easy to read and debug.
+  * **Performance:** It's highly efficient and avoids the overhead of the regex engine.
+  * **Simplicity:** You don't need to worry about escaping special characters.
+
+Use **Method 2 (Regular Expressions)** if you are already heavily using regex in your project or if you anticipate needing more complex pattern-matching capabilities in the future.
