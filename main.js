@@ -168,3 +168,36 @@ export class YourDataTableComponent implements OnDestroy {
       * The magic is `onCleanup(() => { this.stopPolling(); })`. This function is provided by `effect` and runs automatically whenever the `effect` is about to re-run or be destroyed. It's the perfect place to stop the polling, ensuring no stray timers are left running when the user navigates away or the project changes.
 
 This refactored code aligns perfectly with your existing logic, embraces modern Angular features, and implements robust, leak-free polling.
+
+
+SCSS
+
+/* Styles for when the toggle is in a "normal" on-state */
+.custom-toggle.is-on {
+  --mdc-switch-selected-track-color: #1a73e8; // Blue track
+  --mdc-switch-selected-handle-color: #ffffff;
+  --mdc-switch-selected-state-layer-color: #1a73e8;
+}
+
+/* Styles for when the toggle is in a "critical" on-state */
+.custom-toggle.is-critical.is-on {
+  --mdc-switch-selected-track-color: #d93025; // Red track
+  --mdc-switch-selected-handle-color: #ffffff;
+  --mdc-switch-selected-state-layer-color: #d93025;
+}
+2. Apply Classes Dynamically in HTML
+
+Use Angular's [ngClass] directive to apply the styles based on component properties.
+
+HTML
+
+<mat-slide-toggle
+    class="custom-toggle"
+    [ngClass]="{ 
+        'is-on': pollingService.isPollingEnabled(), 
+        'is-critical': someOtherCondition 
+    }"
+    [checked]="pollingService.isPollingEnabled()"
+    (change)="onToggleChange($event)">
+    Critical Refresh
+</mat-slide-toggle>
