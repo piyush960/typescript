@@ -1,135 +1,218 @@
-You can manage this nested structure by creating corresponding nested Java classes. For Spring's map binding to work best, I recommend a small adjustment to your properties file by adding a common key like `environments`.
+Excellent idea. That's a very common and user-friendly feature. To achieve this, we need to introduce a centralized state management mechanism that all your components can listen to.
 
-Here’s the complete approach.
+The best-practice Angular way to do this is with a shared service that holds the state of the toggle. All components that perform polling will inject this service and react to its changes.
 
------
+Here is the complete, step-by-step guide to implement a global auto-refresh toggle.
 
-### \#\# 1. Adjust Your `application.properties` File
+### Step 1: Create a Shared `PollingService`
 
-Group your environments (`np1`, `np2`) under a single key like `environments`. This enables Spring Boot to bind them into a `Map`, making your code more flexible if you add `np3` later.
+This service will be the single source of truth for whether auto-refresh is enabled.
 
-**`application.properties`**
+**1. Generate the service with the Angular CLI:**
 
-```properties
-# Group all environments under a common key
-openshift.environments.np1.gl.api-server=...
-openshift.environments.np1.gl.auth-server=...
-openshift.environments.np1.sl.api-server=...
-openshift.environments.np1.sl.auth-server=...
-
-openshift.environments.np2.gl.api-server=...
-openshift.environments.np2.gl.auth-server=...
-openshift.environments.np2.sl.api-server=...
-openshift.environments.np2.sl.auth-server=...
+```bash
+ng generate service services/polling
 ```
 
------
+**2. Implement the service logic:**
+We'll use an Angular Signal to hold the state, making it reactive and easy to consume.
 
-### \#\# 2. Create Nested Java Configuration Classes
+```typescript
+// src/app/services/polling.service.ts
 
-Now, create a Java class structure that exactly mirrors your new properties file structure.
+import { Injectable, signal } from '@angular/core';
 
-**`OpenShiftProperties.java`**
+@Injectable({
+  providedIn: 'root'
+})
+export class PollingService {
+  // Create a writable signal to hold the state.
+  // We'll default it to true (auto-refresh is ON).
+  readonly isPollingEnabled = signal<boolean>(true);
 
-```java
-import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.stereotype.Component;
-import java.util.Map;
+  constructor() { }
 
-@Component
-@ConfigurationProperties(prefix = "openshift")
-public class OpenShiftProperties {
+  /**
+   * Toggles the current polling state.
+   */
+  togglePolling(): void {
+    this.isPollingEnabled.update(currentValue => !currentValue);
+  }
 
-    /**
-     * This field name "environments" matches the key in your properties file.
-     * Spring will populate this map with "np1", "np2", etc., as keys.
-     */
-    private Map<String, EnvironmentConfig> environments;
-
-    // Getter and Setter for the environments map
-    public Map<String, EnvironmentConfig> getEnvironments() { return environments; }
-    public void setEnvironments(Map<String, EnvironmentConfig> environments) { this.environments = environments; }
-
-    /**
-     * Represents a single environment (e.g., np1), which contains gl and sl clusters.
-     */
-    public static class EnvironmentConfig {
-        private ClusterConfig gl;
-        private ClusterConfig sl;
-
-        // Getters and Setters for gl and sl
-        public ClusterConfig getGl() { return gl; }
-        public void setGl(ClusterConfig gl) { this.gl = gl; }
-        public ClusterConfig getSl() { return sl; }
-        public void setSl(ClusterConfig sl) { this.sl = sl; }
-    }
-
-    /**
-     * Represents the final cluster configuration with the server URLs.
-     * This class remains the same as before.
-     */
-    public static class ClusterConfig {
-        private String apiServer;
-        private String authServer;
-
-        // Getters and Setters for apiServer and authServer
-        public String getApiServer() { return apiServer; }
-        public void setApiServer(String apiServer) { this.apiServer = apiServer; }
-        public String getAuthServer() { return authServer; }
-        public void setAuthServer(String authServer) { this.authServer = authServer; }
-    }
+  /**
+   * Explicitly sets the polling state.
+   * @param isEnabled The desired state.
+   */
+  setPolling(isEnabled: boolean): void {
+    this.isPollingEnabled.set(isEnabled);
+  }
 }
 ```
 
+### Step 2: Create the Toggle Button Component
+
+This component can be placed in your app's main layout, like a header or toolbar.
+
+**1. Generate the component:**
+
+```bash
+ng generate component shared/auto-refresh-toggle
+```
+
+**2. Implement the component logic and template:**
+This component injects the `PollingService` to control and display the toggle state. I'll use the Angular Material Slide Toggle for a nice UI, but a simple checkbox works just as well.
+
+**Component (`.ts` file):**
+
+```typescript
+// src/app/shared/auto-refresh-toggle/auto-refresh-toggle.component.ts
+
+import { Component } from '@angular/core';
+import { PollingService } from '../../services/polling.service';
+import { MatSlideToggleModule } from '@angular/material/slide-toggle'; // Example using Angular Material
+import { FormsModule } from '@angular/forms';
+
+@Component({
+  selector: 'app-auto-refresh-toggle',
+  standalone: true, // Assuming a modern standalone component
+  imports: [MatSlideToggleModule, FormsModule],
+  templateUrl: './auto-refresh-toggle.component.html',
+  styleUrls: ['./auto-refresh-toggle.component.css']
+})
+export class AutoRefreshToggleComponent {
+  // Make the service public so the template can access its signal directly
+  constructor(public pollingService: PollingService) {}
+
+  onToggleChange(event: any): void {
+    // The 'any' type for event is for compatibility with different UI libraries.
+    // For MatSlideToggle, it's MatSlideToggleChange.
+    this.pollingService.setPolling(event.checked);
+  }
+}
+```
+
+**Component Template (`.html` file):**
+
+```html
+<!-- src/app/shared/auto-refresh-toggle/auto-refresh-toggle.component.html -->
+
+<div class="toggle-container">
+  <mat-slide-toggle
+    [checked]="pollingService.isPollingEnabled()"
+    (change)="onToggleChange($event)"
+    labelPosition="before">
+    Auto-Refresh (10s)
+  </mat-slide-toggle>
+</div>
+```
+
+Now, you just need to place this component in your app's layout, for example, in `app.component.html`:
+`<app-auto-refresh-toggle></app-auto-refresh-toggle>`
+
 -----
 
-### \#\# 3. How to Use It in Your Code
+### Step 3: Refactor Your Data Table Component
 
-Now you can inject `OpenShiftProperties` and traverse the nested structure to get the exact URL you need with just the IDs.
+Finally, let's update `YourDataTableComponent` (and your other 3 components) to respect the state from the `PollingService`.
 
-Here’s an example showing how to select the server URLs based on the user's choice.
+The core idea is to make the main `effect` react to changes in **both** its original dependencies (`isActiveTab`, `project`) AND the new `isPollingEnabled` signal.
 
-```java
-@Service
-public class MySomeService {
+```typescript
+// In YourDataTableComponent.ts
 
-    private final OpenShiftProperties openShiftProperties;
+import { Component, OnDestroy, effect } from '@angular/core';
+// ... other imports
+import { Subscription, timer, switchMap, tap, catchError, of } from 'rxjs';
+import { PollingService } from '../services/polling.service'; // <-- IMPORT THE NEW SERVICE
 
-    @Autowired
-    public MySomeService(OpenShiftProperties openShiftProperties) {
-        this.openShiftProperties = openShiftProperties;
-    }
+@Component({
+  // ...
+})
+export class YourDataTableComponent implements OnDestroy {
+  // ... (all your existing properties: rowData, isDataLoading, etc.)
+  private pollingSubscription?: Subscription;
 
-    /**
-     * Example method to get the API server URL.
-     * @param environmentId e.g., "np1"
-     * @param clusterId e.g., "gl"
-     * @return The API server URL
-     */
-    public String getApiUrl(String environmentId, String clusterId) {
-        // 1. Get the config for the selected environment (np1)
-        OpenShiftProperties.EnvironmentConfig envConfig = openShiftProperties.getEnvironments().get(environmentId);
-        
-        if (envConfig == null) {
-            throw new IllegalArgumentException("Invalid environment ID: " + environmentId);
-        }
+  constructor(
+    public appService: AppService,
+    private apiService: ApiHttpService,
+    private pollingService: PollingService // <-- INJECT THE SERVICE
+  ) {
+    // --- MODIFIED: The main effect now also depends on the polling service ---
+    effect((onCleanup) => {
+      const isActiveTab = this.appService.selectedTab() === this.tabId;
+      const project = this.appService.selectedProject();
+      const isPollingOn = this.pollingService.isPollingEnabled(); // <-- READ THE SIGNAL
 
-        // 2. Select the gl or sl cluster config
-        OpenShiftProperties.ClusterConfig clusterConfig;
-        if ("gl".equalsIgnoreCase(clusterId)) {
-            clusterConfig = envConfig.getGl();
-        } else if ("sl".equalsIgnoreCase(clusterId)) {
-            clusterConfig = envConfig.getSl();
+      // Stop any previous activity before deciding what to do next
+      this.stopPollingAndClearData();
+
+      if (isActiveTab && project) {
+        if (isPollingOn) {
+          // If polling is ON, start the polling process.
+          this.startPolling();
         } else {
-            throw new IllegalArgumentException("Invalid cluster ID: " + clusterId);
+          // If polling is OFF, just fetch the data once.
+          this.fetchDataOnce();
         }
-        
-        if (clusterConfig == null) {
-            throw new IllegalStateException("Configuration missing for cluster: " + clusterId);
-        }
+      }
 
-        // 3. Return the final api-server URL
-        return clusterConfig.getApiServer();
+      onCleanup(() => {
+        this.stopPollingAndClearData();
+      });
+    });
+  }
+
+  // --- NEW: A single method to fetch data one time ---
+  fetchDataOnce(): void {
+    this.isDataLoading.set(true);
+    const project = this.appService.selectedProject();
+    const cluster = "both";
+    this.apiService.getAllAppResource(cluster, project).pipe(
+      catchError(error => {
+        console.error('Error during single fetch:', error);
+        this.isDataLoading.set(false);
+        return of(null);
+      })
+    ).subscribe(data => {
+      if (data) {
+        this.processData(data);
+      }
+    });
+  }
+
+  // startPolling and processData methods remain the same as before.
+  startPolling(): void {
+    // ... (no changes needed here)
+  }
+  processData(data: any): void {
+    // ... (no changes needed here)
+  }
+
+
+  // --- RENAMED & MODIFIED: A clearer cleanup method ---
+  private stopPollingAndClearData(): void {
+    if (this.pollingSubscription) {
+      this.pollingSubscription.unsubscribe();
+      this.pollingSubscription = undefined;
     }
+    // Optionally reset data here if you want the table to clear
+    // when toggling or switching tabs.
+    // this.rowData = [];
+    this.isDataLoading.set(false);
+  }
+
+  ngOnDestroy(): void {
+    this.stopPollingAndClearData();
+  }
 }
 ```
+
+### How It All Works Together
+
+1.  The `PollingService` acts as a global store for the `isPollingEnabled` state.
+2.  The `AutoRefreshToggleComponent` modifies this state.
+3.  Because `YourDataTableComponent`'s `effect` reads the `pollingService.isPollingEnabled()` signal, it automatically re-runs whenever the toggle is flipped.
+4.  When the `effect` re-runs, it checks the new state of the toggle and decides whether to call `startPolling()` or `fetchDataOnce()`.
+5.  The `onCleanup` function ensures that whenever the state changes (e.g., user flips the toggle, changes tabs), the previous operation (polling or single fetch) is correctly cancelled before the new one begins.
+
+You can now apply this exact same logic to your other three components. They will all inject the `PollingService` and will all react in unison to the global toggle.
