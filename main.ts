@@ -1,218 +1,81 @@
-Excellent idea. That's a very common and user-friendly feature. To achieve this, we need to introduce a centralized state management mechanism that all your components can listen to.
+Here is the **raw markdown** version of your architecture flow breakdown with proper formatting and keyword highlighting using backticks and markdown conventions:
 
-The best-practice Angular way to do this is with a shared service that holds the state of the toggle. All components that perform polling will inject this service and react to its changes.
+```markdown
+# Breakdown of the Architecture Flow
 
-Here is the complete, step-by-step guide to implement a global auto-refresh toggle.
+This section provides a detailed explanation of the different parts of the diagram, matching the flow of the application.
 
-### Step 1: Create a Shared `PollingService`
+---
 
-This service will be the single source of truth for whether auto-refresh is enabled.
+## 1. Application Startup & Initialization
 
-**1. Generate the service with the Angular CLI:**
+- **Properties Loading**:  
+  At startup, Spring Boot reads the `application.properties` file and populates the `OpenShiftProperties` bean. This makes all environment and cluster URLs (`np1`-`np6`, `gl`/`sl`) available in a type-safe Java object.
 
-```bash
-ng generate service services/polling
+- **Read-Only Token Caching**:  
+  The application uses the `TokenProvider` to fetch initial tokens for the read-only service account for both `gl` and `sl` clusters (defaulting to the `np1` environment). These tokens are cached in memory for immediate use by unauthenticated users.
+
+---
+
+## 2. The Request Lifecycle & AOP Interception
+
+- Every incoming request first passes through **Spring Security** and is routed to the appropriate `Controller`.
+
+- The `Controller` calls a method in a `Service` class. This is where the **AOP** logic is applied.
+
+- `@UseOpenShiftClient`:  
+  Before the service method executes, the `OpenShiftClientAspect` intercepts the call. Its primary job is to determine the context (**read-only** or **user session**) and set up the correct `OpenShiftClient`.
+
+- `@Auditable`:  
+  Similarly, the `AuditAspect` intercepts methods annotated for auditing. If it's a logged-in user, it extracts session details and logs the action to the **H2 database**.
+
+---
+
+## 3. Read-Only (Unauthenticated) Flow
+
+- If the `OpenShiftClientAspect` detects there is no active user session, it retrieves the appropriate cached read-only token (`gl` or `sl` based on the `@ClusterIdentifier` parameter).
+
+- It uses this token to configure an `OpenShiftClient` for the current request.
+
+- The service method then executes using this **read-only client** to fetch data from the **OpenShift API**.
+
+---
+
+## 4. User Login & Session Creation
+
+- When a user logs in via the `AuthController`, their credentials and chosen environment (`np1`, `np2`, etc.) are captured.
+
+- Using the `OpenShiftProperties` bean, the correct auth-server URLs for the chosen environment are looked up.
+
+- The `TokenProvider` fetches user-specific tokens for both `gl` and `sl`.
+
+- A new `HttpSession` is created, and the user's `env`, `tokenGL`, and `tokenSL` are stored as attributes.  
+  With `Spring Session JDBC`, this session data is automatically persisted in the **H2 database**.
+
+---
+
+## 5. Logged-In (Authenticated) Flow
+
+- When a request arrives with a valid session cookie, the `OpenShiftClientAspect` detects the active session.
+
+- It retrieves the user's tokens and environment information directly from the `HttpSession`.
+
+- It creates a new, request-scoped `OpenShiftClient` using the user's specific token.  
+  This ensures **security** and **isolation** between user requests.
+
+- The service method executes with the **permissions of the authenticated user**.
+
+---
+
+## 6. Token Expiry and Refresh Logic
+
+The architecture correctly handles token expiry for both scenarios:
+
+- **Read-Only Token Expiry**:  
+  If a call using the read-only client fails with a `401` error, the `OpenShiftClientAspect` catches the exception, re-fetches a new token using the `TokenProvider`, and automatically retries the original operation.
+
+- **User Session Token Expiry**:  
+  If a call using a user's token fails with a `401` error, the aspect catches it, invalidates the user's session (securely logging them out), and sends a `401 Unauthorized` response to the frontend, prompting the user to log in again.
 ```
 
-**2. Implement the service logic:**
-We'll use an Angular Signal to hold the state, making it reactive and easy to consume.
-
-```typescript
-// src/app/services/polling.service.ts
-
-import { Injectable, signal } from '@angular/core';
-
-@Injectable({
-  providedIn: 'root'
-})
-export class PollingService {
-  // Create a writable signal to hold the state.
-  // We'll default it to true (auto-refresh is ON).
-  readonly isPollingEnabled = signal<boolean>(true);
-
-  constructor() { }
-
-  /**
-   * Toggles the current polling state.
-   */
-  togglePolling(): void {
-    this.isPollingEnabled.update(currentValue => !currentValue);
-  }
-
-  /**
-   * Explicitly sets the polling state.
-   * @param isEnabled The desired state.
-   */
-  setPolling(isEnabled: boolean): void {
-    this.isPollingEnabled.set(isEnabled);
-  }
-}
-```
-
-### Step 2: Create the Toggle Button Component
-
-This component can be placed in your app's main layout, like a header or toolbar.
-
-**1. Generate the component:**
-
-```bash
-ng generate component shared/auto-refresh-toggle
-```
-
-**2. Implement the component logic and template:**
-This component injects the `PollingService` to control and display the toggle state. I'll use the Angular Material Slide Toggle for a nice UI, but a simple checkbox works just as well.
-
-**Component (`.ts` file):**
-
-```typescript
-// src/app/shared/auto-refresh-toggle/auto-refresh-toggle.component.ts
-
-import { Component } from '@angular/core';
-import { PollingService } from '../../services/polling.service';
-import { MatSlideToggleModule } from '@angular/material/slide-toggle'; // Example using Angular Material
-import { FormsModule } from '@angular/forms';
-
-@Component({
-  selector: 'app-auto-refresh-toggle',
-  standalone: true, // Assuming a modern standalone component
-  imports: [MatSlideToggleModule, FormsModule],
-  templateUrl: './auto-refresh-toggle.component.html',
-  styleUrls: ['./auto-refresh-toggle.component.css']
-})
-export class AutoRefreshToggleComponent {
-  // Make the service public so the template can access its signal directly
-  constructor(public pollingService: PollingService) {}
-
-  onToggleChange(event: any): void {
-    // The 'any' type for event is for compatibility with different UI libraries.
-    // For MatSlideToggle, it's MatSlideToggleChange.
-    this.pollingService.setPolling(event.checked);
-  }
-}
-```
-
-**Component Template (`.html` file):**
-
-```html
-<!-- src/app/shared/auto-refresh-toggle/auto-refresh-toggle.component.html -->
-
-<div class="toggle-container">
-  <mat-slide-toggle
-    [checked]="pollingService.isPollingEnabled()"
-    (change)="onToggleChange($event)"
-    labelPosition="before">
-    Auto-Refresh (10s)
-  </mat-slide-toggle>
-</div>
-```
-
-Now, you just need to place this component in your app's layout, for example, in `app.component.html`:
-`<app-auto-refresh-toggle></app-auto-refresh-toggle>`
-
------
-
-### Step 3: Refactor Your Data Table Component
-
-Finally, let's update `YourDataTableComponent` (and your other 3 components) to respect the state from the `PollingService`.
-
-The core idea is to make the main `effect` react to changes in **both** its original dependencies (`isActiveTab`, `project`) AND the new `isPollingEnabled` signal.
-
-```typescript
-// In YourDataTableComponent.ts
-
-import { Component, OnDestroy, effect } from '@angular/core';
-// ... other imports
-import { Subscription, timer, switchMap, tap, catchError, of } from 'rxjs';
-import { PollingService } from '../services/polling.service'; // <-- IMPORT THE NEW SERVICE
-
-@Component({
-  // ...
-})
-export class YourDataTableComponent implements OnDestroy {
-  // ... (all your existing properties: rowData, isDataLoading, etc.)
-  private pollingSubscription?: Subscription;
-
-  constructor(
-    public appService: AppService,
-    private apiService: ApiHttpService,
-    private pollingService: PollingService // <-- INJECT THE SERVICE
-  ) {
-    // --- MODIFIED: The main effect now also depends on the polling service ---
-    effect((onCleanup) => {
-      const isActiveTab = this.appService.selectedTab() === this.tabId;
-      const project = this.appService.selectedProject();
-      const isPollingOn = this.pollingService.isPollingEnabled(); // <-- READ THE SIGNAL
-
-      // Stop any previous activity before deciding what to do next
-      this.stopPollingAndClearData();
-
-      if (isActiveTab && project) {
-        if (isPollingOn) {
-          // If polling is ON, start the polling process.
-          this.startPolling();
-        } else {
-          // If polling is OFF, just fetch the data once.
-          this.fetchDataOnce();
-        }
-      }
-
-      onCleanup(() => {
-        this.stopPollingAndClearData();
-      });
-    });
-  }
-
-  // --- NEW: A single method to fetch data one time ---
-  fetchDataOnce(): void {
-    this.isDataLoading.set(true);
-    const project = this.appService.selectedProject();
-    const cluster = "both";
-    this.apiService.getAllAppResource(cluster, project).pipe(
-      catchError(error => {
-        console.error('Error during single fetch:', error);
-        this.isDataLoading.set(false);
-        return of(null);
-      })
-    ).subscribe(data => {
-      if (data) {
-        this.processData(data);
-      }
-    });
-  }
-
-  // startPolling and processData methods remain the same as before.
-  startPolling(): void {
-    // ... (no changes needed here)
-  }
-  processData(data: any): void {
-    // ... (no changes needed here)
-  }
-
-
-  // --- RENAMED & MODIFIED: A clearer cleanup method ---
-  private stopPollingAndClearData(): void {
-    if (this.pollingSubscription) {
-      this.pollingSubscription.unsubscribe();
-      this.pollingSubscription = undefined;
-    }
-    // Optionally reset data here if you want the table to clear
-    // when toggling or switching tabs.
-    // this.rowData = [];
-    this.isDataLoading.set(false);
-  }
-
-  ngOnDestroy(): void {
-    this.stopPollingAndClearData();
-  }
-}
-```
-
-### How It All Works Together
-
-1.  The `PollingService` acts as a global store for the `isPollingEnabled` state.
-2.  The `AutoRefreshToggleComponent` modifies this state.
-3.  Because `YourDataTableComponent`'s `effect` reads the `pollingService.isPollingEnabled()` signal, it automatically re-runs whenever the toggle is flipped.
-4.  When the `effect` re-runs, it checks the new state of the toggle and decides whether to call `startPolling()` or `fetchDataOnce()`.
-5.  The `onCleanup` function ensures that whenever the state changes (e.g., user flips the toggle, changes tabs), the previous operation (polling or single fetch) is correctly cancelled before the new one begins.
-
-You can now apply this exact same logic to your other three components. They will all inject the `PollingService` and will all react in unison to the global toggle.
+Let me know if you want this in a downloadable `.md` file or with a diagram too.
