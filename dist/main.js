@@ -1,16 +1,26 @@
 "use strict";
-let age = 2;
-age = '2';
-age = false;
-let title;
-title = 2;
-title = 'Apple';
-title = {
-    title: 'Hello World',
+// type guards
+const swapIdType = (id) => {
+    if (typeof id === 'number') {
+        return id.toString();
+    }
+    else {
+        return parseInt(id);
+    }
 };
-const getName = (value) => {
-    return value + value;
+console.log(swapIdType(1), swapIdType('2'));
+const getUser = (user) => {
+    if (user.type === 'user') {
+        console.log(`User is ${user.userName}`);
+    }
+    else {
+        console.log(`Person is ${user.name}`);
+    }
 };
-const result = getName('1');
-console.log(result);
-// useful when migrating project from js to ts
+const personOne = {
+    type: 'person',
+    name: 'Sam',
+    age: 21,
+    id: 1,
+};
+getUser(personOne);

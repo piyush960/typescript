@@ -1,23 +1,51 @@
+// type guards
 
-let age: any = 2;
+type Id = number | string
 
-age = '2';
-age = false;
-
-let title;
-title = 2;
-title = 'Apple';
-
-title = {
-    title: 'Hello World',
+const swapIdType = (id: Id) => {
+    if(typeof id === 'number'){
+        return id.toString();
+    }
+    else{
+        return parseInt(id)
+    }
 }
 
+console.log(swapIdType(1), swapIdType('2'));
 
-const getName = (value: any): number => {
-    return value + value
+// with interface
+
+
+interface User {
+    type: 'user', // tagging the interface
+    userName: string,
+    email: string,
+    id: Id
 }
 
-const result = getName('1');
-console.log(result);
+interface Person {
+    type: 'person', // tagging the interface
+    name: string,
+    age: number,
+    id: Id
+}
 
-// useful when migrating project from js to ts
+type userType = User | Person
+
+const getUser = (user: userType) => {
+    if(user.type === 'user'){
+        console.log(`User is ${user.userName}`);
+    }
+    else{
+        console.log(`Person is ${user.name}`);
+    }
+}
+
+const personOne: Person = {
+    type: 'person',
+    name: 'Sam',
+    age: 21,
+    id: 1,
+}
+
+getUser(personOne);
