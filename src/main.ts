@@ -1,21 +1,22 @@
+// union types
 
-const person: [string, number, boolean] = ['Alex', 21, true];
+let userId: number | string;
 
-const hsla: [number, string, string, number] = [20, '100%', '50%', 1];
+userId = 1;
+userId = '67332'
 
-function coordinate(): [number, number]{
+// with type alias
 
-    const lat = 100
-    const long = 50
+type Id = number | string
 
-    return [lat, long]
+const userIdOne: Id = 1;
+const userIdTwo: Id = '1'
+
+
+// pitfall
+const convert = (numId : Id): Id => {
+    // can use only properties and method common to both the types (i.e. number | string)
+    // parseInt(numId);
+
+    return 1;
 }
-
-const coords = coordinate();
-
-// named tuples
-
-let user: [name: string, age: number] 
-
-user = ['Sam', 24];
-
